@@ -1,0 +1,16 @@
+[package]
+name = "sense"
+version = "0.1.0"
+authors = ["uHOOCCOOHu <uHOOCCOOHu@users.noreply.github.com>"]
+
+[lib]
+name = "sense"
+path = "src/sense/lib.rs"
+
+[[bin]]
+name = "sense"
+path = "src/bin/main.rs"
+doc = false
+
+[features]
+default = []
