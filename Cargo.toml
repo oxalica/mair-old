@@ -1,14 +1,14 @@
 [package]
-name = "sense"
+name = "mair"
 version = "0.1.0"
 authors = ["uHOOCCOOHu <uHOOCCOOHu@users.noreply.github.com>"]
 
 [lib]
-name = "sense"
-path = "src/sense/lib.rs"
+name = "mair"
+path = "src/mair/lib.rs"
 
 [[bin]]
-name = "sense"
+name = "mair"
 path = "src/bin/main.rs"
 doc = false
 
