@@ -49,51 +49,68 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, TokenizeError> {
     }
 }
 
+macro_rules! match_head {
+    ($s:ident; _ => $e:expr;) => ($e);
+    ($s:ident; pat ($($pat:pat)|+) => $e:expr; $($tt:tt)*) => ({
+        match $s[0] {
+            $($pat)|+ => $e,
+            _         => match_head!($s; $($tt)*),
+        }
+    });
+    ($s:ident; $($pat:expr),+ => $e:expr; $($tt:tt)*) => ({
+        if [$(&$pat[..]),+].iter().any(|p| $s.starts_with(p)) {
+            $e;
+        } else {
+            match_head!($s; $($tt)*);
+        }
+    });
+    ($s:ident; $($pat:expr),+; $(($c:ident))* => $e:expr; $($tt:tt)*) => ({
+        if let Some(c) = [$(&$pat[..]),+].iter().find(|p| $s.starts_with(p)) {
+            $(let $c = &$s[..c.len()];)*
+            $s = &$s[c.len()..];
+            $e;
+        } else {
+            match_head!($s; $($tt)*);
+        }
+    });
+}
+
 /// Helper parser for `tokenize`.
 fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
     let mut v = vec![];
     macro_rules! delimited { ($r:expr, $dm:expr) => {{
-        let (mut ns, tts) = tokens(&s[1..])?;
-        if trim(&mut ns) && ns[0] == $r {
-            v.push(Delimited($dm, tts));
-            s = &ns[1..];
-        } else {
-            return Err(UnmatchedDelimiter(s, ns));
-        }
-    }}; }
+            let (mut ns, tts) = tokens(&s[1..])?;
+            if trim(&mut ns) && ns[0] == $r {
+                v.push(Delimited($dm, tts));
+                s = &ns[1..];
+            } else {
+                return Err(UnmatchedDelimiter(s, ns));
+            }
+        }}; }
     while trim(&mut s) {
-        match s[0] {
-            b')' | b']' | b'}' => break,
-            b'(' => delimited!(b')', Paren),
-            b'[' => delimited!(b']', Bracket),
-            b'{' => delimited!(b'}', Brace),
-            b'/' if s.get(1) == Some(&b'/') => match s.get(2) {
-                Some(&b'!')                            => { // "//!"
-                    s = &s[3..];
-                    v.push(InnerDoc(line_comment_inner(&mut s)));
-                },
-                Some(&b'/') if s.get(3) != Some(&b'/') => { // "///" but not "////"
-                    s = &s[3..];
-                    v.push(OuterDoc(line_comment_inner(&mut s)));
-                },
-                _                                      => { // normal "//"
-                    line_comment_inner(&mut s);
-                },
-            },
-            b'/' if s.get(1) == Some(&b'*') => match s.get(2) {
-                Some(&b'!')                            => { // "/*!"
-                    s = &s[3..];
-                    v.push(InnerDoc(block_comment_inner(&mut s)?));
-                },
-                Some(&b'*') if s.get(3) != Some(&b'*') => { // "/**" but not "/***"
-                    s = &s[3..];
-                    v.push(OuterDoc(block_comment_inner(&mut s)?));
-                },
-                _                                      => { // normal "/*"
-                    block_comment_inner(&mut s)?;
-                },
-            },
-            b'_' | b'a'...b'z' | b'A'...b'Z' => { // identifier
+        match_head!(s;
+            b")", b"]", b"}" => break;
+            b"("        => delimited!(b')', Paren);
+            b"["        => delimited!(b']', Bracket);
+            b"{"        => delimited!(b'}', Brace);
+            b"//!" ;    => v.push(InnerDoc(line_comment_inner(&mut s)));
+            b"////";    => line_comment_inner(&mut s);
+            b"///" ;    => v.push(OuterDoc(line_comment_inner(&mut s)));
+            b"//"  ;    => line_comment_inner(&mut s);
+            b"/*!" ;    => v.push(InnerDoc(block_comment_inner(&mut s)?));
+            b"/***";    => block_comment_inner(&mut s)?;
+            b"/**" ;    => v.push(OuterDoc(block_comment_inner(&mut s)?));
+            b"/*"  ;    => block_comment_inner(&mut s)?;
+            b"::", b"->", b"=>",
+            b"==", b"!=", b"<=", b">=", b"<", b">",
+            b"&&", b"||",
+            b"!", b"=",
+            b"+=", b"-=", b"*=", b"/=", b"%=",
+            b"&=", b"|=", b"^=", b"<<=", b">>=",
+            b"+", b"-", b"*", b"/", b"%",
+            b"&", b"|", b"^", b"<<", b">>"; (c) =>
+                v.push(Symbol(to_str(c)));
+            pat (b'_' | b'a'...b'z' | b'A'...b'Z') => { // identifier
                 let mut i = 1;
                 while i < s.len() { match s[i] {
                     b'_' | b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => i += 1,
@@ -101,9 +118,9 @@ fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
                 }}
                 v.push(Ident(to_str(&s[..i])));
                 s = &s[i..];
-            },
-            _ => unimplemented!(),
-        }
+            };
+            _ => unimplemented!();
+        );
     }
     Ok((s, v))
 }
