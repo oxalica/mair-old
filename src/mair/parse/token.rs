@@ -1,8 +1,10 @@
 use std::str::from_utf8_unchecked;
+use std::char::from_u32;
 use super::ptr_diff;
 use self::DelimToken::*;
 use self::TokenizeError::*;
 use self::Token::*;
+use self::LiteralType::*;
 
 type RawErr<'a> = TokenizeError<&'a [u8]>;
 
@@ -10,6 +12,9 @@ type RawErr<'a> = TokenizeError<&'a [u8]>;
 pub enum TokenizeError<Pos=usize> {
     UnclosedComment(Pos),
     UnmatchedDelimiter(Pos, Pos),
+    UnterminatedStr(Pos),
+    InvalidRawStrBegin(Pos),
+    InvalidEscape(Pos),
     UnexpectedChar(Pos),
 }
 
@@ -26,7 +31,17 @@ pub enum Token<'a> {
     InnerDoc(&'a str),
     OuterDoc(&'a str),
     Ident(&'a str),
+    Lifetime(&'a str),  // excluding leader `'`
     Symbol(&'a str),
+    Literal(LiteralType),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum LiteralType {
+    Char, Str, ByteStr,
+    Int, Float,
+    I8, I16, I32, I64, ISize,
+    U8, U16, U32, U64, USize,
 }
 
 /// Parse source string into a list of tokens.
@@ -43,8 +58,14 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, TokenizeError> {
                 Err(UnclosedComment(index_of(beg))),
             UnmatchedDelimiter(beg, end) =>
                 Err(UnmatchedDelimiter(index_of(beg), index_of(end))),
+            UnterminatedStr(pos)         =>
+                Err(UnterminatedStr(index_of(pos))),
+            InvalidRawStrBegin(pos)      =>
+                Err(InvalidRawStrBegin(index_of(pos))),
+            InvalidEscape(pos)           =>
+                Err(InvalidEscape(index_of(pos))),
             UnexpectedChar(pos)          =>
-                Err(UnexpectedChar(index_of(pos)))
+                Err(UnexpectedChar(index_of(pos))),
         },
     }
 }
@@ -101,14 +122,17 @@ fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
             b"/***";    => block_comment_inner(&mut s)?;
             b"/**" ;    => v.push(OuterDoc(block_comment_inner(&mut s)?));
             b"/*"  ;    => block_comment_inner(&mut s)?;
+            b"\"", b"r\"", b"r#", b"b\"", b"br\"", b"br#" =>
+                v.push(string_lit(&mut s)?);
             b"::", b"->", b"=>",
-            b"==", b"!=", b"<=", b">=", b"<", b">",
+            b"==", b"!=", b"<=", b">=",
             b"&&", b"||",
             b"!", b"=",
             b"+=", b"-=", b"*=", b"/=", b"%=",
             b"&=", b"|=", b"^=", b"<<=", b">>=",
             b"+", b"-", b"*", b"/", b"%",
-            b"&", b"|", b"^", b"<<", b">>"; (c) =>
+            b"&", b"|", b"^", b"<<", b">>",
+            b"<", b">"; (c) =>
                 v.push(Symbol(to_str(c)));
             pat (b'_' | b'a'...b'z' | b'A'...b'Z') => { // identifier
                 let mut i = 1;
@@ -123,6 +147,72 @@ fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
         );
     }
     Ok((s, v))
+}
+
+/// Parse an string literal ("" r"" b"" br"").
+#[inline]
+fn string_lit<'a>(s: &mut &'a [u8]) -> Result<Token<'a>, RawErr<'a>> {
+    let ok = if s[0] == b'b' {
+        *s = &s[1..];
+        Ok(Literal(ByteStr))
+    } else { Ok(Literal(Str)) };
+    let raw = s[0] == b'r'; if raw { *s = &s[1..]; }
+    let mut hashes = 0;
+    while s.first() == Some(&b'#') { hashes += 1; *s = &s[1..]; }
+    if s.first() == Some(&b'"') {
+        let begin = *s;
+        *s = &s[1..];
+        let mut cnt = -1;
+        while !s.is_empty() {
+            match s[0] {
+                b'"'             => cnt = 0,
+                b'\\' if !raw    => {
+                    eat_escaped(s)?;
+                    cnt = -1;
+                    continue;
+                },
+                b'#' if cnt >= 0 => {
+                    cnt += 1;
+                },
+                _                => cnt = -1,
+            }
+            *s = &s[1..];
+            if cnt == hashes { return ok; }
+        }
+        Err(UnterminatedStr(begin))
+    } else { Err(InvalidRawStrBegin(*s)) }
+}
+
+/// Consume an escaped char (including leading `\`).
+fn eat_escaped<'a>(s: &mut &'a [u8]) -> Result<(), RawErr<'a>> {
+    assert!(s[0] == b'\\');
+    if s.len() == 1 { return Err(InvalidEscape(*s)); }
+    match s[1] {
+        b'\\' | b'n' | b'r' | b't' | b'0' |
+        b'"' | b'\'' | b'\n' | b'\r' => { *s = &s[2..] },
+        b'x' => if s.len() < 4 ||
+                   !(s[2] as char).is_digit(8) ||
+                   !(s[3] as char).is_digit(16) {
+            return Err(InvalidEscape(*s));
+        } else { *s = &s[4..]; },
+        b'u' if s.len() >= 5 && s[2] == b'{' => {
+            let mut i = 0;
+            let mut code = 0u32;
+            while i < 6 && 3 + i < s.len() {
+                if let Some(x) = (s[3 + i] as char).to_digit(16) {
+                    code = code << 4 | x;
+                } else { break }
+                i += 1;
+            }
+            i += 3; // `\u{`
+            if s.get(i) != Some(&b'}') || from_u32(code).is_none() {
+                return Err(InvalidEscape(s));
+            }
+            *s = &s[i+1..];
+        },
+        _    => return Err(InvalidEscape(*s)),
+    }
+    Ok(())
 }
 
 /// Parse the body of line comment(excluding '//') and return it.
@@ -174,6 +264,72 @@ fn trim(s: &mut &[u8]) -> bool {
 fn to_str(s: &[u8]) -> &str { unsafe{ from_utf8_unchecked(s) } }
 
 #[test]
+fn test_string_lit() {
+    let mut s: &[u8];
+    for &(c, ref r, t) in [
+        (&br#""\""."#[..],                 Ok(Literal(Str)),       &b"."[..]),
+        (&br#"b"a"."#[..],                 Ok(Literal(ByteStr)),   &b"."[..]),
+        (&br#"r"\"."#[..],                 Ok(Literal(Str)),       &b"."[..]),
+        (&br#"br"b"."#[..],                Ok(Literal(ByteStr)),   &b"."[..]),
+        (&br##"r#"#"#."##[..],             Ok(Literal(Str)),       &b"."[..]),
+        (&br##"br#"#"#."##[..],            Ok(Literal(ByteStr)),   &b"."[..]),
+        (&br###"r##"##"'##"#""##."###[..], Ok(Literal(Str)),       &b"."[..]),
+        (&b"\""[..],              Err(UnterminatedStr(&b"\""[..])),      &b""[..]),
+        (&b"\"\\??"[..],          Err(InvalidEscape(&b"\\??"[..])),      &b"\\??"[..]),
+        (&b"r##"[..],             Err(InvalidRawStrBegin(&b""[..])),     &b""[..]),
+        (&b"r## \""[..],          Err(InvalidRawStrBegin(&b" \""[..])),  &b" \""[..]),
+        (&br##"r#"a""##[..],      Err(UnterminatedStr(&b"\"a\""[..])), &b""[..]),
+        (&br###"r##""# #"###[..], Err(UnterminatedStr(&b"\"\"# #"[..])), &b""[..]),
+    ].iter() {
+        println!("{} {:?} {}", to_str(c), r, to_str(t));
+        s = c;
+        assert_eq!(string_lit(&mut s), *r);
+        assert_eq!(s, t);
+    }
+}
+
+#[test]
+fn test_escape() {
+    let mut s: &[u8];
+    for &c in [
+        &b"\\"[..], &b"\\="[..], &b"\\x"[..],
+        &b"\\xX9"[..], &b"\\x9G"[..], &b"\\x80"[..],
+        &b"\\u"[..], &b"\\u{"[..], &b"\\u}"[..], &b"\\u{}"[..],
+        &b"\\u{p}"[..], &b"\\u{0p}"[..], &b"\\u{FFFFFF}"[..], &b"\\u{0000000}"[..],
+    ].iter() {
+        s = c;
+        println!("Should fail: {}", to_str(s));
+        assert_eq!(eat_escaped(&mut s), Err(InvalidEscape(c)));
+        assert_eq!(s, c);
+    }
+    for &(c, l) in [
+        (&b"\\\\\\"[..], 2), (&b"\\x7FF"[..], 4),
+        (&b"\\u{2764} "[..], 8), (&b"\\u{10FfFf}"[..], 10)
+    ].iter() {
+        s = c;
+        println!("Should ok: {}", to_str(s));
+        assert_eq!(eat_escaped(&mut s), Ok(()));
+        assert_eq!(s, &c[l..]);
+    }
+}
+
+#[test]
+fn test_comment_parsing() {
+    let mut s: &[u8] = &b""[..];
+    assert_eq!(line_comment_inner(&mut s), ""); assert_eq!(s, b"");
+    s = &b"a a\ta"[..];
+    assert_eq!(line_comment_inner(&mut s), "a a\ta"); assert_eq!(s, b"");
+    s = &b" a\n\r"[..];
+    assert_eq!(line_comment_inner(&mut s), " a"); assert_eq!(s, b"\n\r");
+    s = &b"b \r\n"[..];
+    assert_eq!(line_comment_inner(&mut s), "b "); assert_eq!(s, b"\r\n");
+    s = &b"\n"[..];
+    assert_eq!(line_comment_inner(&mut s), ""); assert_eq!(s, b"\n");
+    s = &b"\r"[..];
+    assert_eq!(line_comment_inner(&mut s), ""); assert_eq!(s, b"\r");
+}
+
+#[test]
 fn test_tokenize() {
     assert_eq!(tokenize(""),                Ok(vec![]));
     assert_eq!(tokenize("  hell0 world "),  Ok(vec![Ident("hell0"), Ident("world")]));
@@ -190,4 +346,15 @@ fn test_tokenize() {
             ]),
         ])
     );
+    assert_eq!(tokenize("a-=!\"a\"br#\"\"\"#"), Ok(vec![
+        Ident("a"),
+        Symbol("-="),
+        Symbol("!"),
+        Literal(Str),
+        Literal(ByteStr),
+    ]));
+    assert_eq!(tokenize("<<="), Ok(vec![Symbol("<<=")]));
+    assert_eq!(tokenize("< <="), Ok(vec![Symbol("<"), Symbol("<=")]));
+    assert_eq!(tokenize("<< ="), Ok(vec![Symbol("<<"), Symbol("=")]));
+    assert_eq!(tokenize("< < ="), Ok(vec![Symbol("<"), Symbol("<"), Symbol("=")]));
 }
