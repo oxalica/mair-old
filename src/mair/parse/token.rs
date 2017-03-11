@@ -158,7 +158,6 @@ fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
 }
 
 /// Parse integer or float literal.
-#[inline]
 fn num_lit<'a>(s: &mut &'a [u8]) -> Result<Token<'a>, RawErr<'a>> {
     let mut ns = *s;
     let e = InvalidNumLit(ns);
@@ -197,7 +196,6 @@ fn num_lit<'a>(s: &mut &'a [u8]) -> Result<Token<'a>, RawErr<'a>> {
 }
 
 /// Parse integer literal.
-#[inline]
 fn int_lit<'a>(s: &mut &'a [u8], radix: u32, suffix: bool) ->
         Result<Token<'a>, RawErr<'a>> {
     assert!([2, 8, 10, 16].contains(&radix));
@@ -250,7 +248,6 @@ fn num_suffix<'a>(s: &mut &'a [u8], float: bool) -> Option<LiteralType> {
 }
 
 /// Parse an string literal ("" r"" b"" br"").
-#[inline]
 fn string_lit<'a>(s: &mut &'a [u8]) -> Result<Token<'a>, RawErr<'a>> {
     let ok = if s[0] == b'b' {
         *s = &s[1..];
@@ -316,7 +313,6 @@ fn eat_escaped<'a>(s: &mut &'a [u8]) -> Result<(), RawErr<'a>> {
 }
 
 /// Parse the body of line comment(excluding '//') and return it.
-#[inline]
 fn line_comment_inner<'a>(s: &mut &'a [u8]) -> &'a str {
     let mut i = 0;
     while i < s.len() && !b"\r\n".contains(&s[i]) { i += 1 }
@@ -326,7 +322,6 @@ fn line_comment_inner<'a>(s: &mut &'a [u8]) -> &'a str {
 }
 
 /// Parse the body of block comment(excluding '/*') recursively and return it.
-#[inline]
 fn block_comment_inner<'a>(s: &mut &'a [u8]) -> Result<&'a str, RawErr<'a>> {
     let mut ns = *s;
     let mut begins = vec![*s];
@@ -350,7 +345,6 @@ fn block_comment_inner<'a>(s: &mut &'a [u8]) -> Result<&'a str, RawErr<'a>> {
 }
 
 /// Remove leading spaces and return whether there's something left
-#[inline]
 fn trim(s: &mut &[u8]) -> bool {
     while !s.is_empty() { match s[0] {
         b' ' | 0x09...0x0D => *s = &s[1..], // b" \t\n\v\f\r"
@@ -360,7 +354,6 @@ fn trim(s: &mut &[u8]) -> bool {
 }
 
 /// A shortcut to `std::str::from_utf8_unchecked`
-#[inline]
 fn to_str(s: &[u8]) -> &str { unsafe{ from_utf8_unchecked(s) } }
 
 #[test]
