@@ -16,6 +16,8 @@ pub enum TokenizeError<Pos=usize> {
     InvalidRawStrBegin(Pos),
     InvalidEscape(Pos),
     InvalidNumLit(Pos),
+    InvalidCharLit(Pos),
+    InvalidCharLitOrLifetime(Pos),
     UnexpectedChar(Pos),
 }
 
@@ -56,20 +58,15 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, TokenizeError> {
             Err(UnexpectedChar(index_of(tail)))
         },
         Err(e)          => match e {
-            UnclosedComment(beg)         =>
-                Err(UnclosedComment(index_of(beg))),
-            UnmatchedDelimiter(beg, end) =>
-                Err(UnmatchedDelimiter(index_of(beg), index_of(end))),
-            UnterminatedStr(pos)         =>
-                Err(UnterminatedStr(index_of(pos))),
-            InvalidRawStrBegin(pos)      =>
-                Err(InvalidRawStrBegin(index_of(pos))),
-            InvalidEscape(pos)           =>
-                Err(InvalidEscape(index_of(pos))),
-            InvalidNumLit(pos)           =>
-                Err(InvalidNumLit(index_of(pos))),
-            UnexpectedChar(pos)          =>
-                Err(UnexpectedChar(index_of(pos))),
+            UnclosedComment(beg)          => Err(UnclosedComment(index_of(beg))),
+            UnmatchedDelimiter(beg, end)  => Err(UnmatchedDelimiter(index_of(beg), index_of(end))),
+            UnterminatedStr(pos)          => Err(UnterminatedStr(index_of(pos))),
+            InvalidRawStrBegin(pos)       => Err(InvalidRawStrBegin(index_of(pos))),
+            InvalidEscape(pos)            => Err(InvalidEscape(index_of(pos))),
+            InvalidNumLit(pos)            => Err(InvalidNumLit(index_of(pos))),
+            InvalidCharLit(pos)           => Err(InvalidCharLit(index_of(pos))),
+            UnexpectedChar(pos)           => Err(UnexpectedChar(index_of(pos))),
+            InvalidCharLitOrLifetime(pos) => Err(InvalidCharLitOrLifetime(index_of(pos))),
         },
     }
 }
@@ -129,6 +126,11 @@ fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
             b"0x"  ;    => v.push(int_lit(&mut s, 16, true)?);
             b"0o"  ;    => v.push(int_lit(&mut s, 8,  true)?);
             b"0b"  ;    => v.push(int_lit(&mut s, 2,  true)?);
+            b"b'"  ;    => { char_lit_inner(&mut s)?; v.push(Literal(U8)); };
+            b"'"   ;    => match char_lit_inner(&mut s) {
+                Ok(tok) => v.push(tok),
+                Err(_)  => v.push(Lifetime(ident(&mut s)?)),
+            };
             pat (b'0'...b'9') => v.push(num_lit(&mut s)?);
             b"\"", b"r\"", b"r#", b"b\"", b"br\"", b"br#" =>
                 v.push(string_lit(&mut s)?);
@@ -142,19 +144,27 @@ fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
             b"&", b"|", b"^", b"<<", b">>",
             b"<", b">"; (c) =>
                 v.push(Symbol(to_str(c)));
-            pat (b'_' | b'a'...b'z' | b'A'...b'Z') => { // identifier
-                let mut i = 1;
-                while i < s.len() { match s[i] {
-                    b'_' | b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => i += 1,
-                    _ => break,
-                }}
-                v.push(Ident(to_str(&s[..i])));
-                s = &s[i..];
-            };
+            pat (b'_' | b'a'...b'z' | b'A'...b'Z') =>
+                v.push(Ident(ident(&mut s)?));
             _ => unimplemented!();
         );
     }
     Ok((s, v))
+}
+
+/// Parse an identifier, keyword or lifetime.
+fn ident<'a>(s: &mut &'a [u8]) -> Result<&'a str, RawErr<'a>> {
+    let mut i = 0;
+    while i < s.len() { match s[i] {
+        b'_' | b'a'...b'z' | b'A'...b'Z' | b'0'...b'9' => i += 1,
+        _ => break,
+    }}
+    if i == 0 { // never reach here when parsing identifier in main loop.
+        return Err(InvalidCharLitOrLifetime(*s));
+    }
+    let ret = to_str(&s[..i]);
+    *s = &s[i..];
+    Ok(ret)
 }
 
 /// Parse integer or float literal.
@@ -245,6 +255,21 @@ fn num_suffix<'a>(s: &mut &'a [u8], float: bool) -> Option<LiteralType> {
             )
         } else { None };
     )
+}
+
+/// Parse an char literal inner. (excluding leading `'`)
+fn char_lit_inner<'a>(s: &mut &'a [u8]) -> Result<Token<'a>, RawErr<'a>> {
+    let e = Err(InvalidCharLit(*s));
+    let mut ns = *s;
+    if ns.is_empty() { return e; }
+    match_head!(ns;
+        b"\n", b"\r", b"\t" => return e;
+        b"\\"               => { eat_escaped(&mut ns)? };
+        _                   => ns = &ns[1..];
+    );
+    if ns.first() != Some(&b'\'') { return e; }
+    *s = &ns[1..];
+    Ok(Literal(Char))
 }
 
 /// Parse an string literal ("" r"" b"" br"").
@@ -481,6 +506,7 @@ fn test_comment_parsing() {
 
 #[test]
 fn test_tokenize() {
+    // basic test
     assert_eq!(tokenize(""),                Ok(vec![]));
     assert_eq!(tokenize("  hell0 world "),  Ok(vec![Ident("hell0"), Ident("world")]));
     assert_eq!(tokenize("a"),               Ok(vec![Ident("a")]));
@@ -496,6 +522,7 @@ fn test_tokenize() {
             ]),
         ])
     );
+    // symbol test
     assert_eq!(tokenize("a-=!\"a\"br#\"\"\"#"), Ok(vec![
         Ident("a"),
         Symbol("-="),
@@ -503,8 +530,18 @@ fn test_tokenize() {
         Literal(Str),
         Literal(ByteStr),
     ]));
-    assert_eq!(tokenize("<<="), Ok(vec![Symbol("<<=")]));
-    assert_eq!(tokenize("< <="), Ok(vec![Symbol("<"), Symbol("<=")]));
-    assert_eq!(tokenize("<< ="), Ok(vec![Symbol("<<"), Symbol("=")]));
+    assert_eq!(tokenize("<<="),   Ok(vec![Symbol("<<=")]));
+    assert_eq!(tokenize("< <="),  Ok(vec![Symbol("<"), Symbol("<=")]));
+    assert_eq!(tokenize("<< ="),  Ok(vec![Symbol("<<"), Symbol("=")]));
     assert_eq!(tokenize("< < ="), Ok(vec![Symbol("<"), Symbol("<"), Symbol("=")]));
+    // char literal & lifetime test
+    assert_eq!(tokenize("'"),       Err(InvalidCharLitOrLifetime(1)));
+    assert_eq!(tokenize("' "),      Err(InvalidCharLitOrLifetime(1)));
+    assert_eq!(tokenize("'\\'"),    Err(InvalidCharLitOrLifetime(1)));
+    assert_eq!(tokenize("'\\''"),   Ok(vec![Literal(Char)]));
+    assert_eq!(tokenize("'\\\\'"),  Ok(vec![Literal(Char)]));
+    assert_eq!(tokenize("'a'"),     Ok(vec![Literal(Char)]));
+    assert_eq!(tokenize("'a"),      Ok(vec![Lifetime("a")]));
+    assert_eq!(tokenize("'a 'b"),   Ok(vec![Lifetime("a"), Lifetime("b")]));
+    assert_eq!(tokenize("'a'b"),    Ok(vec![Literal(Char), Ident("b")]));
 }
