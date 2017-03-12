@@ -142,7 +142,8 @@ fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
             b"&=", b"|=", b"^=", b"<<=", b">>=",
             b"+", b"-", b"*", b"/", b"%",
             b"&", b"|", b"^", b"<<", b">>",
-            b"<", b">"; (c) =>
+            b"<", b">",
+            b"$", b"#", b",", b";", b":", b"."; (c) =>
                 v.push(Symbol(to_str(c)));
             pat (b'_' | b'a'...b'z' | b'A'...b'Z') =>
                 v.push(Ident(ident(&mut s)?));
@@ -353,11 +354,11 @@ fn block_comment_inner<'a>(s: &mut &'a [u8]) -> Result<&'a str, RawErr<'a>> {
     while !begins.is_empty() { match ns.first() {
         None                                   =>
             return Err(UnclosedComment(begins.last().unwrap())),
-        Some(&b'*') if s.get(1) == Some(&b'/') => {
+        Some(&b'*') if ns.get(1) == Some(&b'/') => {
             begins.pop();
             ns = &ns[2..];
         } ,
-        Some(&b'/') if s.get(1) == Some(&b'*') => {
+        Some(&b'/') if ns.get(1) == Some(&b'*') => {
             begins.push(ns);
             ns = &ns[2..];
         },
@@ -544,4 +545,43 @@ fn test_tokenize() {
     assert_eq!(tokenize("'a"),      Ok(vec![Lifetime("a")]));
     assert_eq!(tokenize("'a 'b"),   Ok(vec![Lifetime("a"), Lifetime("b")]));
     assert_eq!(tokenize("'a'b"),    Ok(vec![Literal(Char), Ident("b")]));
+    assert_eq!(tokenize(r#"
+/*! module
+    name
+*/
+use std::mem::size_of; /*****/
+// #[macro_export]macro_rules! m { ($($t:tt)*) => (stringify!($($t)*)) }
+type T<'a> = Option<Vec<&'a str>>;
+/// entry
+/// point
+fn main() -> () {
+    println!("{} {}", size_of::<T>(), m![a].to_string());
+}
+    "#), Ok(vec![
+        InnerDoc(" module\n    name\n"),
+        Ident("use"), Ident("std"), Symbol("::"),
+                      Ident("mem"), Symbol("::"),
+                      Ident("size_of"), Symbol(";"),
+        Ident("type"), Ident("T"), Symbol("<"), Lifetime("a"), Symbol(">"),
+            Symbol("="), Ident("Option"), Symbol("<"),
+                Ident("Vec"), Symbol("<"),
+                    Symbol("&"), Lifetime("a"), Ident("str"),
+                Symbol(">>"),
+            Symbol(";"),
+        OuterDoc(" entry"), OuterDoc(" point"),
+        Ident("fn"), Ident("main"), Delimited(Paren, vec![]), Symbol("->"),
+            Delimited(Paren, vec![]),
+        Delimited(Brace, vec![
+            Ident("println"), Symbol("!"),
+            Delimited(Paren, vec![
+                Literal(Str), Symbol(","),
+                Ident("size_of"), Symbol("::"),
+                    Symbol("<"), Ident("T"), Symbol(">"),
+                    Delimited(Paren, vec![]), Symbol(","),
+                Ident("m"), Symbol("!"), Delimited(Bracket, vec![Ident("a")]),
+                    Symbol("."), Ident("to_string"), Delimited(Paren, vec![])
+            ]),
+            Symbol(";"),
+        ]),
+    ]));
 }
