@@ -143,7 +143,7 @@ fn tokens(mut s: &[u8]) -> Result<(&[u8], Vec<Token>), RawErr> {
             b"+", b"-", b"*", b"/", b"%",
             b"&", b"|", b"^", b"<<", b">>",
             b"<", b">",
-            b"$", b"#", b",", b";", b":", b"."; (c) =>
+            b"$", b"#", b",", b";", b":", b".", b"?", b"@"; (c) =>
                 v.push(Symbol(to_str(c)));
             pat (b'_' | b'a'...b'z' | b'A'...b'Z') =>
                 v.push(Ident(ident(&mut s)?));
@@ -172,13 +172,16 @@ fn ident<'a>(s: &mut &'a [u8]) -> Result<&'a str, RawErr<'a>> {
 fn num_lit<'a>(s: &mut &'a [u8]) -> Result<Token<'a>, RawErr<'a>> {
     let mut ns = *s;
     let e = InvalidNumLit(ns);
-    macro_rules! consume_int { () => (
-        int_lit(&mut ns, 10, false).map_err(|_| e)?
-    ) };
     int_lit(&mut ns, 10, false)?;
     let mut ty = match_head!(ns;
         b"._"            => return Err(e); // `1._2` in invalid
-        b"." ;           => { consume_int!(); Float };
+        b"."             => {
+            let mut s2 = &ns[1..];
+            if int_lit(&mut s2, 10, false).is_ok() {
+                ns = s2;
+                Float
+            } else { Int }
+        };
         _                => Int;
     );
     ty = match_head!(ns;
@@ -188,7 +191,7 @@ fn num_lit<'a>(s: &mut &'a [u8]) -> Result<Token<'a>, RawErr<'a>> {
                 b"-", b"+" => ns = &ns[1..]; // `1e-1`
                 _          => {};
             );
-            consume_int!();
+            int_lit(&mut ns, 10, false).map_err(|_| e)?;
             Float
         };
         _          => ty;
@@ -550,7 +553,7 @@ fn test_tokenize() {
     name
 */
 use std::mem::size_of; /*****/
-// #[macro_export]macro_rules! m { ($($t:tt)*) => (stringify!($($t)*)) }
+#[macro_export]macro_rules! m { ($($t:tt)*) => (stringify!($($t)*)) }
 type T<'a> = Option<Vec<&'a str>>;
 /// entry
 /// point
@@ -562,6 +565,23 @@ fn main() -> () {
         Ident("use"), Ident("std"), Symbol("::"),
                       Ident("mem"), Symbol("::"),
                       Ident("size_of"), Symbol(";"),
+        Symbol("#"), Delimited(Bracket, vec![Ident("macro_export")]),
+        Ident("macro_rules"), Symbol("!"), Ident("m"), Delimited(Brace, vec![
+            Delimited(Paren, vec![
+                Symbol("$"), Delimited(Paren, vec![
+                    Symbol("$"), Ident("t"), Symbol(":"), Ident("tt"),
+                ]),
+                Symbol("*"),
+            ]),
+            Symbol("=>"),
+            Delimited(Paren, vec![
+                Ident("stringify"), Symbol("!"), Delimited(Paren, vec![
+                    Symbol("$"), Delimited(Paren, vec![
+                        Symbol("$"), Ident("t")
+                    ]), Symbol("*"),
+                ]),
+            ]),
+        ]),
         Ident("type"), Ident("T"), Symbol("<"), Lifetime("a"), Symbol(">"),
             Symbol("="), Ident("Option"), Symbol("<"),
                 Ident("Vec"), Symbol("<"),
@@ -584,4 +604,21 @@ fn main() -> () {
             Symbol(";"),
         ]),
     ]));
+}
+
+#[test]
+fn test_tokenize_file() {
+    use std::fs::File;
+    use std::io::Read;
+
+    let mut source = String::new();
+    let mut f = File::open(file!()).unwrap();
+    f.read_to_string(&mut source).unwrap();
+    match tokenize(&source) {
+        Ok(_)  => {},
+        Err(e) => {
+            println!("{:?}", e);
+            assert!(false);
+        }
+    }
 }
