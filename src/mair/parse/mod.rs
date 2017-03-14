@@ -1,4 +1,5 @@
-mod token;
+pub mod token;
+pub mod ast;
 pub use self::token::tokenize;
 
 /// Get item offset of b from a, similar to pointer subtraction
