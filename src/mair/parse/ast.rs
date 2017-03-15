@@ -1,10 +1,9 @@
 use super::token::Token;
 
-// TODO: meta attributes
-
 /// A module, or a crate, as well as a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Mod<'a> {
+    pub attrs:        Vec<Attr<'a>>,
     pub extern_crate: Vec<&'a str>,
     pub items:        Vec<Item<'a>>,
 }
@@ -12,6 +11,7 @@ pub struct Mod<'a> {
 /// An Item, which is the component of a crate/module.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Item<'a> {
+    pub attrs:  Vec<Attr<'a>>,
     pub is_pub: bool,
     pub detail: ItemDetail<'a>,
 }
@@ -23,7 +23,7 @@ pub enum ItemDetail<'a> {
     Func  (Template<'a>, FuncTy<'a>),
     Type  (Template<'a>, &'a str, Ty<'a>),
     Struct(Template<'a>, &'a str, StructDetail<'a>),
-    Enum  (Template<'a>, &'a str, Vec<(&'a str, Vec<Ty<'a>>)>),
+    Enum  (Template<'a>, &'a str, Vec<ElemField<'a>>),
     Const (&'a str, Ty<'a>, Expr<'a>),
     Static(&'a str, Ty<'a>, Expr<'a>),
     Trait (Template<'a>, &'a str, Vec<TraitItem<'a>>),
@@ -39,19 +39,33 @@ pub enum UseDetail<'a> {
     UseAs (Path<'a>, &'a str),
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ElemField<'a> {
+    Tuple (Vec<Attr<'a>>, &'a str, Vec<Ty<'a>>),
+    Struct(Vec<Attr<'a>>, &'a str, Vec<(Vec<Attr<'a>>, Ty<'a>)>),
+}
+
 /// Struct content.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum StructDetail<'a> {
     /// Unit struct, like `struct T;`.
     Unit,
     /// Tuple struct, like `struct T(i32, i32);`.
-    Tuple (Vec<Ty<'a>>),
+    Tuple (Vec<StructTupleElem<'a>>),
     /// Normal struct with fields, like `struct T{ a: i32, };`.
     Fields(Vec<StructField<'a>>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct StructTupleElem<'a> {
+    attrs:  Vec<Attr<'a>>,
+    is_pub: bool,
+    ty:     Ty<'a>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StructField<'a> {
+    attrs:  Vec<Attr<'a>>,
     is_pub: bool,
     name:   &'a str,
     ty:     Ty<'a>,
@@ -59,14 +73,14 @@ pub struct StructField<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TraitItem<'a> {
-    Type(&'a str, Ty<'a>),
-    Func(Template<'a>, FuncTy<'a>, Option<FuncBody<'a>>),
+    Type(Vec<Attr<'a>>, &'a str, Ty<'a>),
+    Func(Vec<Attr<'a>>, Template<'a>, FuncTy<'a>, Option<FuncBody<'a>>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ImplItem<'a> {
-    Type(&'a str, Ty<'a>),
-    Func(Template<'a>, FuncTy<'a>, FuncBody<'a>),
+    Type(Vec<Attr<'a>>, &'a str, Ty<'a>),
+    Func(Vec<Attr<'a>>, Template<'a>, FuncTy<'a>, FuncBody<'a>),
 }
 
 /// A path, like `::std::Option`, `MyEnum::A`, etc.
@@ -135,6 +149,19 @@ pub enum FuncTy<'a> {
     Action(Vec<Ty<'a>>),
     /// Other normal function, like `fn(i32) -> i32`.
     Normal(Vec<Ty<'a>>, Box<Ty<'a>>),
+}
+
+/// An attribute.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Attr<'a> {
+    /// A single attribute name, like `test`, `macro_use`.
+    Flag(&'a str),
+    /// A key-value pair, like `crate_type = "lib"`, `recursion_limit="64"`.
+    /// TODO: literal parsing.
+    Value(&'a str, ()),
+    /// An attribute with a list of sub-attribute arguments,
+    /// like `cfg(target_os="linux")`.
+    Sub(Vec<Attr<'a>>),
 }
 
 type FuncBody<'a> = Vec<Token<'a>>;
