@@ -269,7 +269,11 @@ fn char_lit_inner<'a>(s: &mut &'a [u8]) -> Result<Token<'a>, RawErr<'a>> {
     match_head!(ns;
         b"\n", b"\r", b"\t" => return e;
         b"\\"               => { eat_escaped(&mut ns)? };
-        _                   => ns = &ns[1..];
+        _                   => {
+            let mut it = to_str(ns).chars();
+            it.next().unwrap();
+            ns = it.as_str().as_bytes();
+        };
     );
     if ns.first() != Some(&b'\'') { return e; }
     *s = &ns[1..];
@@ -545,6 +549,7 @@ fn test_tokenize() {
     assert_eq!(tokenize("'\\''"),   Ok(vec![Literal(Char)]));
     assert_eq!(tokenize("'\\\\'"),  Ok(vec![Literal(Char)]));
     assert_eq!(tokenize("'a'"),     Ok(vec![Literal(Char)]));
+    assert_eq!(tokenize("'中'"),     Ok(vec![Literal(Char)]));
     assert_eq!(tokenize("'a"),      Ok(vec![Lifetime("a")]));
     assert_eq!(tokenize("'a 'b"),   Ok(vec![Lifetime("a"), Lifetime("b")]));
     assert_eq!(tokenize("'a'b"),    Ok(vec![Literal(Char), Ident("b")]));
