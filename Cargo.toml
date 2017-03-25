@@ -12,5 +12,8 @@ name = "mair"
 path = "src/bin/main.rs"
 doc = false
 
+[dependencies]
+pest = "0.4"
+
 [features]
 default = []
