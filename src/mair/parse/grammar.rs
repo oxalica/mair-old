@@ -237,9 +237,15 @@ grammar! {
     ty_tuple   =  { ["("] ~ (ty ~ ([","] ~ ty)* ~ [","]?)? ~ [")"] }
     trait_name =  { qident ~ (["<"] ~ ty ~ ([","] ~ ty)* ~ [","]? ~ [">"])? }
 
-    // expressions
-    const_expr =  { any* } // TODO
-    block_expr =  { any* } // TODO
+    // expressions & statements
+    const_expr = _{ block_expr } // not check in parser
+    block_expr =  { ["{"] ~ inner_attr* ~ stmt* ~ expr? ~ ["}"] }
+    stmt       =  {
+        item |
+        expr ~ [";"] |
+        kw_let ~ ident ~ ([":"] ~ ty)? ~ ["="] ~ expr ~ [";"]
+    }
+    expr       =  { any* } // TODO
 
     // crate
     crate_file = _{ whitespace* ~ module ~ eoi }
