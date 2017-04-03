@@ -7,6 +7,7 @@ grammar! {
     nl       = _{ ["\r\n"] | ["\n"] | ["\r"] } // \f \v
     sp       = _{ [" "] | ["\t"] }
     ident    = @{ alpha ~ (alpha | ['0'..'9'])* ~ t_ }
+    qident   = _{ ["::"]? ~ (ident ~ ["::"])* ~ ident }
     lifetime = @{ ["'"] ~ ident }
     t_       = _{ !(alpha | ['0'..'9']) } // end of ident
 
@@ -225,9 +226,16 @@ grammar! {
     // << crate(module) & items
 
     // type & trait_name
-    ty         =  { ident } // TODO: other composite types
+    ty         =  {
+        ty_tuple |
+        ["&"] ~ lifetime? ~ kw_mut? ~ ty |
+        ["*"] ~ (kw_mut | kw_const) ~ ty |
+        ["["] ~ ty ~ ([";"] ~ dec_lit)? ~ ["]"] |
+        kw_fn ~ ["("] ~ (ty ~ ([","] ~ ty)* ~ [","]?)? ~ [")"] ~ (["->"] ~ fn_ret)? |
+        qident ~ (["<"] ~ ty ~ ([","] ~ ty)* ~ [","]? ~ [">"])?
+    }
     ty_tuple   =  { ["("] ~ (ty ~ ([","] ~ ty)* ~ [","]?)? ~ [")"] }
-    trait_name =  { ident ~ (["<"] ~ ty ~ ([","] ~ ty)* ~ [","]? ~ [">"])? }
+    trait_name =  { qident ~ (["<"] ~ ty ~ ([","] ~ ty)* ~ [","]? ~ [">"])? }
 
     // expressions
     const_expr =  { any* } // TODO
