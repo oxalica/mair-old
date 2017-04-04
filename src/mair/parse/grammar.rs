@@ -7,7 +7,7 @@ grammar! {
     nl       = _{ ["\r\n"] | ["\n"] | ["\r"] } // \f \v
     sp       = _{ [" "] | ["\t"] }
     ident    = @{ alpha ~ (alpha | ['0'..'9'])* ~ t_ }
-    qident   = _{ ["::"]? ~ (ident ~ ["::"])* ~ ident }
+    qident   =  { ["::"]? ~ (ident ~ ["::"])* ~ ident }
     lifetime = @{ ["'"] ~ ident }
     t_       = _{ !(alpha | ['0'..'9']) } // end of ident
 
@@ -227,6 +227,7 @@ grammar! {
 
     // type & trait_name
     ty         =  {
+        ["("] ~ ty ~ [")"] |
         ty_tuple |
         ["&"] ~ lifetime? ~ kw_mut? ~ ty |
         ["*"] ~ (kw_mut | kw_const) ~ ty |
@@ -234,20 +235,101 @@ grammar! {
         kw_fn ~ ["("] ~ (ty ~ ([","] ~ ty)* ~ [","]?)? ~ [")"] ~ (["->"] ~ fn_ret)? |
         qident ~ (["<"] ~ ty ~ ([","] ~ ty)* ~ [","]? ~ [">"])?
     }
-    ty_tuple   =  { ["("] ~ (ty ~ ([","] ~ ty)* ~ [","]?)? ~ [")"] }
+    ty_tuple   =  { ["("] ~ ty ~ [","] ~ (ty ~ [","])* ~ ty? ~ [")"] }
     trait_name =  { qident ~ (["<"] ~ ty ~ ([","] ~ ty)* ~ [","]? ~ [">"])? }
 
-    // expressions & statements
+    // statements
     const_expr = _{ block_expr } // not check in parser
     block_expr =  { ["{"] ~ inner_attr* ~ stmt* ~ expr? ~ ["}"] }
     stmt       =  {
         item |
         expr ~ [";"] |
-        kw_let ~ ident ~ ([":"] ~ ty)? ~ ["="] ~ expr ~ [";"]
+        kw_let ~ let_match ~ [";"]
     }
-    expr       =  { any* } // TODO
+
+    // >> expressions
+    expr       =  {
+        { expr3 }
+        op_assign = {< assign_ops }
+        op_left   = {  ["<-"] }
+        op_range  = {  ["..."] | [".."] }
+        op_logor  = {  ["||"] }
+        op_logand = {  ["&&"] }
+        op_comp   = {  ["=="] | ["!="] | ["<="] | [">="] | ["<"] | [">"] }
+        op_or     = {  ["|"] }
+        op_xor    = {  ["^"] }
+        op_and    = {  ["&"] }
+        op_shift  = {  ["<<"] | [">>"] }
+        op_add    = {  ["+"] | ["-"] }
+        op_mul    = {  ["*"] | ["/"] | ["%"] }
+        op_as     = {  kw_as }
+    }
+        assign_ops = _{
+            ["+="] | ["-="] | ["*="] | ["/="] | ["%="] |
+            ["&="] | ["|="] | ["^="] | ["<<="] | [">>="]
+        }
+    expr3      =  { unary_op_pre* ~ expr2 ~ unary_op_post* }
+        unary_op_pre  = _{ ["-"] | ["*"] | ["!"] | ["&"] ~ kw_mut? }
+        unary_op_post = _{ ["?"] }
+    expr2      =  { expr1 ~ (
+        (["["] ~ expr ~ ["]"])+ |    // index expression
+        (["("] ~ (expr ~ ([","] ~ expr)* ~ [","]?)? ~ [")"])+   // function call
+    )? }
+    expr1      =  { expr0 ~ (["."] ~ (ident | dec_lit))* }
+    expr0      =  {
+        grouped_expr | tuple_expr | block_expr | lambda_expr | struct_expr |
+        control_expr |
+        literal | qident
+    }
+        grouped_expr =  { ["("] ~ expr ~ [")"] }
+        tuple_expr   =  { ["("] ~ expr ~ [","] ~ (expr ~ [","])* ~ expr? ~ [")"] }
+        lambda_expr  =  {
+            ["|"] ~ (lambda_arg ~ [","])* ~ lambda_arg? ~ ["|"] ~
+            (["->"] ~ fn_ret ~ block_expr | expr)
+        }
+            lambda_arg = { ident ~ ([":"] ~ ty)? } // TODO: tuple match
+        struct_expr  =  {
+            ty ~ ["{"] ~
+            (struct_expr_field ~ ([","] ~ struct_expr_field)*)? ~
+            ([","] ~ ([".."] ~ expr)?)? ~
+            ["}"]
+        }
+            struct_expr_field = { ident ~ [":"] ~ expr }
+        control_expr =  {
+            (lifetime ~ [":"])? ~ (
+                kw_loop |
+                kw_while ~ (kw_let ~ let_match | expr) |
+                kw_for ~ pat ~ kw_in ~ expr
+            ) ~ block_expr |
+            (kw_break | kw_continue) ~ lifetime? |
+            (kw_return ~ expr?) |
+            if_expr |
+            match_expr
+        }
+        if_expr      =  {
+            kw_if ~ (kw_let ~ let_match | expr) ~ block_expr ~
+            (kw_else ~ if_expr)?
+        }
+        match_expr   =  {
+            kw_match ~ expr ~ ["{"] ~
+            (match_arm ~ ([","] ~ match_arm)* ~ [","]?)? ~
+            ["}"]
+        }
+            match_arm = { match_pat ~ ["=>"] ~ expr }
+    // << expressions
+
+    // pattern match
+    let_match  = { pat ~ ["="] ~ expr }
+    match_pat  = { pat ~ (["|"] ~ pat)* ~ (kw_if ~ expr)? }
+    pat        = { (ident ~ ["@"])? ~ pat0 }
+    pat0       = {
+        literal ~ ((["..."] | [".."]) ~ literal)? |
+        ident ~ (["("] ~ (pat ~ ([","] ~ pat)* ~ [","]?)? ~ [")"])? |
+        (kw_ref | ["&"] ~ kw_mut?) ~ pat
+    }
 
     // crate
     crate_file = _{ whitespace* ~ module ~ eoi }
+
 } // grammar!
 } // impl_rdp!
