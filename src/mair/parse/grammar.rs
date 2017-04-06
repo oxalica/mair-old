@@ -249,7 +249,7 @@ grammar! {
 
     // >> expressions
     expr       =  {
-        { expr3 }
+        { expr1 }
         op_assign = {< assign_ops }
         op_left   = {  ["<-"] }
         op_range  = {  ["..."] | [".."] }
@@ -268,14 +268,14 @@ grammar! {
             ["+="] | ["-="] | ["*="] | ["/="] | ["%="] |
             ["&="] | ["|="] | ["^="] | ["<<="] | [">>="]
         }
-    expr3      =  { unary_op_pre* ~ expr2 ~ unary_op_post* }
-        unary_op_pre  = _{ ["-"] | ["*"] | ["!"] | ["&"] ~ kw_mut? }
-        unary_op_post = _{ ["?"] }
-    expr2      =  { expr1 ~ (
-        (["["] ~ expr ~ ["]"])+ |    // index expression
-        (["("] ~ (expr ~ ([","] ~ expr)* ~ [","]?)? ~ [")"])+   // function call
-    )? }
-    expr1      =  { expr0 ~ (["."] ~ (ident | dec_lit))* }
+    expr1      =  { prefix_op* ~ expr0 ~ postfix_op* }
+        prefix_op  = _{ ["-"] | ["*"] | ["!"] | ["&"] ~ kw_mut? }
+        postfix_op = _{
+            ["?"] |                                              // carrier
+            ["["] ~ expr ~ ["]"] |                               // index expression
+            ["."] ~ (ident | dec_lit) |                          // member access
+            ["("] ~ (expr ~ ([","] ~ expr)* ~ [","]?)? ~ [")"]   // function call
+        }
     expr0      =  {
         grouped_expr | tuple_expr | block_expr | lambda_expr | struct_expr |
         control_expr |
@@ -321,12 +321,13 @@ grammar! {
     // pattern match
     let_match  = { pat ~ ["="] ~ expr }
     match_pat  = { pat ~ (["|"] ~ pat)* ~ (kw_if ~ expr)? }
-    pat        = { (ident ~ ["@"])? ~ pat0 }
-    pat0       = {
+    pat        = {
         literal ~ ((["..."] | [".."]) ~ literal)? |
-        ident ~ (["("] ~ (pat ~ ([","] ~ pat)* ~ [","]?)? ~ [")"])? |
-        (kw_ref | ["&"] ~ kw_mut?) ~ pat
+        ["&"] ~ kw_mut? ~ pat |
+        ident ~ ["("] ~ (pat ~ ([","] ~ pat)* ~ [","]?)? ~ [")"] |
+        bind_var ~ (["@"] ~ pat)?
     }
+    bind_var   = { kw_ref? ~ kw_mut? ~ ident } // or an enum item (only an ident)
 
     // crate
     crate_file = _{ whitespace* ~ module ~ eoi }
