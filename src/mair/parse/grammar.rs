@@ -96,6 +96,19 @@ grammar! {
     comment            = _{ line_comment | block_comment }
     whitespace         = _{ nl | sp }
 
+    // tokens
+    token           = {
+        delimited_token |
+        outer_doc | inner_doc |
+        lifetime | literal | ident |
+        operator | symbol
+        }
+    delimited_token = {
+        ["("] ~ token* ~ [")"] |
+        ["["] ~ token* ~ ["]"] |
+        ["{"] ~ token* ~ ["}"]
+    }
+
     // docs
     outer_doc = {
         ["///"] ~ !["/"] ~ line_comment_tail |
@@ -161,6 +174,7 @@ grammar! {
     module            =  { inner_attr* ~ item* }
     vis               =  { kw_pub? }
     item              =  { outer_attr* ~ vis ~ (
+        plugin_item_call |
         item_extern_crate |
         item_use |
         item_mod |
@@ -221,7 +235,7 @@ grammar! {
         trait_decl_fn  =  { fn_head ~ ([";"] | ["{"] ~ inner_attr* ~ block_expr ~ ["}"]) }
     item_impl          =  {
         kw_impl ~ template? ~ (ty | trait_name ~ kw_for ~ ty) ~
-        ["{"] ~ (item_type | item_fn)* ~ ["}"]
+        ["{"] ~ (item_type | item_fn | plugin_call)* ~ ["}"]
     }
     // << crate(module) & items
 
@@ -277,6 +291,7 @@ grammar! {
             ["("] ~ (expr ~ ([","] ~ expr)* ~ [","]?)? ~ [")"]   // function call
         }
     expr0      =  {
+        plugin_call |
         grouped_expr | tuple_expr | block_expr | lambda_expr | struct_expr |
         control_expr |
         literal | qident
@@ -322,12 +337,23 @@ grammar! {
     let_match  = { pat ~ ["="] ~ expr }
     match_pat  = { pat ~ (["|"] ~ pat)* ~ (kw_if ~ expr)? }
     pat        = {
+        plugin_call |
         literal ~ ((["..."] | [".."]) ~ literal)? |
         ["&"] ~ kw_mut? ~ pat |
         ident ~ ["("] ~ (pat ~ ([","] ~ pat)* ~ [","]?)? ~ [")"] |
         bind_var ~ (["@"] ~ pat)?
     }
     bind_var   = { kw_ref? ~ kw_mut? ~ ident } // or an enum item (only an ident)
+
+    // plugins (including macros)
+    plugin_item_call = { ident ~ ["!"] ~ ident? ~ plugin_item_body }
+    plugin_call      = { ident ~ ["!"] ~ ident? ~ plugin_body }
+    plugin_item_body = {
+        ["("] ~ token* ~ [")"] ~ [";"] |
+        ["["] ~ token* ~ ["]"] ~ [";"] |
+        ["{"] ~ token* ~ ["}"]
+    }
+    plugin_body      = { delimited_token }
 
     // crate
     crate_file = _{ whitespace* ~ module ~ eoi }
