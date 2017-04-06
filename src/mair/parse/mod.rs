@@ -27,7 +27,8 @@ pub fn ptr_diff<T>(a: *const T, b: *const T) -> isize {
     (a as isize - b as isize) / size_of::<T>() as isize
 }
 
-/// Generate a map from character indices to line and column numbers.
+/// Generate a map from character indices to line and column numbers,
+///   including the position next to the end of input (EOI).
 ///
 /// # Example
 ///
@@ -39,20 +40,25 @@ pub fn ptr_diff<T>(a: *const T, b: *const T) -> isize {
 ///     (1, 1), (1, 2), (1, 3),
 ///     (2, 1), (2, 2), (2, 3), (2, 4),
 ///     (3, 1), (3, 2),
+///     (4, 1),
 /// ]);
 /// assert_eq!(gen_position_map(s2), vec![
 ///     (1, 1),
 ///     (2, 1), (2, 2), (2, 3),
 ///     (3, 1),
+///     (4, 1),
 /// ]);
 /// ```
 pub fn gen_position_map(s: &str) -> Vec<(usize, usize)> {
     let mut v = vec![(0, 0); s.len()];
+    let mut lastline = 0;
     for (i, line) in s.lines().enumerate() {
         let begin = ptr_diff(line.as_ptr(), s.as_ptr()) as usize;
+        lastline = i + 1;
         for j in 0..line.len()+2 { // if ends with `\r\n`
             v.get_mut(begin + j).map(|c| *c = (i + 1, j + 1));
         }
     }
+    v.push((lastline + 1, 1));
     v
 }
