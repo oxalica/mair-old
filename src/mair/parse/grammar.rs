@@ -7,7 +7,7 @@ grammar! {
     nl       = _{ ["\r\n"] | ["\n"] | ["\r"] } // \f \v
     sp       = _{ [" "] | ["\t"] }
     ident    = @{ alpha ~ (alpha | ['0'..'9'])* ~ t_ }
-    qident   =  { ["::"]? ~ (ident ~ ["::"])* ~ ident }
+    qident   =  { ["::"]? ~ (ident ~ ["::"])* ~ ident ~ (["::"] ~ template_apply)? }
     lifetime = @{ ["'"] ~ ident }
     t_       = _{ !(alpha | ['0'..'9']) } // end of ident
 
@@ -195,7 +195,7 @@ grammar! {
             ["::"] ~ ["*"] |
             ["::"] ~ ["{"] ~ (ident ~ ([","] ~ ident)* ~ [","]?)? ~ ["}"]
         )? }
-    item_mod           =  { kw_mod ~ ident ~ ["{"] ~ module ~ ["}"] }
+    item_mod           =  { kw_mod ~ ident ~ (["{"] ~ module ~ ["}"] | [";"]) }
     item_fn            =  { fn_head ~ block_expr }
         fn_head        =  {
             kw_fn ~ ident ~ template? ~
@@ -204,9 +204,9 @@ grammar! {
         }
         fn_ret         =  { ["!"] | ty }
         fn_arg         =  { ident ~ [":"] ~ ty } // TODO: tuple match
-        template       =  { (
+        template       =  {
             ["<"] ~ (lifetime ~ ([","] ~ lifetime)* | ident) ~ ([","] ~ ident)* ~ [">"]
-        )? }
+        }
         where_clause   =  { kw_where ~ (ty ~ [":"] ~ trait_name)+ }
     item_extern        =  { kw_extern ~ string_lit? ~ ["{"] ~ fn_extern_decl* ~ ["}"] }
         fn_extern_decl =  { inner_attr* ~ fn_head ~ [";"] }
@@ -223,7 +223,7 @@ grammar! {
     item_enum          =  { kw_enum ~ ident ~ template? ~
         ["{"] ~ (enum_field ~ ([","] ~ enum_field)* ~ [","]*)? ~ ["}"]
     }
-        enum_field     =  { ident ~ (ty_tuple | struct_body)? }
+        enum_field     =  { ident ~ (struct_body | ty_paren | ty_tuple)? }
     item_const         =  { kw_const ~ ident ~ [":"] ~ ty ~ ["="] ~ const_expr }
     iten_static        =  { kw_static ~ ident ~ [":"] ~ ty ~ ["="] ~ const_expr }
     item_trait         =  {
@@ -241,16 +241,20 @@ grammar! {
 
     // type & trait_name
     ty         =  {
-        ["("] ~ ty ~ [")"] |
+        ty_paren |
         ty_tuple |
         ["&"] ~ lifetime? ~ kw_mut? ~ ty |
         ["*"] ~ (kw_mut | kw_const) ~ ty |
         ["["] ~ ty ~ ([";"] ~ dec_lit)? ~ ["]"] |
         kw_fn ~ ["("] ~ (ty ~ ([","] ~ ty)* ~ [","]?)? ~ [")"] ~ (["->"] ~ fn_ret)? |
-        qident ~ (["<"] ~ ty ~ ([","] ~ ty)* ~ [","]? ~ [">"])?
+        qident ~ template_apply?
     }
+    ty_paren   =  { ["("] ~ ty ~ [")"] }
     ty_tuple   =  { ["("] ~ ty ~ [","] ~ (ty ~ [","])* ~ ty? ~ [")"] }
-    trait_name =  { qident ~ (["<"] ~ ty ~ ([","] ~ ty)* ~ [","]? ~ [">"])? }
+    trait_name =  { qident ~ template_apply? }
+        template_apply = {
+            ["<"] ~ (lifetime ~ ([","] ~ lifetime)* | ty) ~ ([","] ~ ty)* ~ [","]? ~ [">"]
+        }
 
     // statements
     const_expr = _{ block_expr } // not check in parser
@@ -340,6 +344,7 @@ grammar! {
         plugin_call |
         literal ~ ((["..."] | [".."]) ~ literal)? |
         ["&"] ~ kw_mut? ~ pat |
+        ["("] ~ (pat ~ [","] ~ (pat ~ [","])* ~ pat?)? ~ [")"] |
         ident ~ ["("] ~ (pat ~ ([","] ~ pat)* ~ [","]?)? ~ [")"] |
         bind_var ~ (["@"] ~ pat)?
     }
