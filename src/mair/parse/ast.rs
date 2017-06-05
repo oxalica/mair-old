@@ -1,5 +1,3 @@
-use super::token::Token;
-
 /// A module, or a crate, as well as a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Mod<'a> {
@@ -164,5 +162,8 @@ pub enum Attr<'a> {
     Sub(Vec<Attr<'a>>),
 }
 
-type FuncBody<'a> = Vec<Token<'a>>;
-type Expr<'a> = Vec<Token<'a>>;
+pub type FuncBody<'a> = Vec<Token<'a>>;
+pub type Expr<'a> = Vec<Token<'a>>;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Token<'a>(&'a ()); // TODO

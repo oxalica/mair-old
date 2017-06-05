@@ -1,5 +1,5 @@
-#![recursion_limit = "512"]
-#[macro_use] extern crate pest;
+#[macro_use] extern crate lazy_static;
+extern crate regex;
 
 pub mod interface;
 pub mod parse;
