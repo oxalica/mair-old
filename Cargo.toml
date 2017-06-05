@@ -2,6 +2,7 @@
 name = "mair"
 version = "0.1.0"
 authors = ["uHOOCCOOHu <uHOOCCOOHu@users.noreply.github.com>"]
+build = "build.rs"
 
 [lib]
 name = "mair"
@@ -12,8 +13,10 @@ name = "mair"
 path = "src/bin/main.rs"
 doc = false
 
-[dependencies]
-pest = "0.4"
+[build-dependencies]
+lalrpop = "0.13.0"
 
-[features]
-default = []
+[dependencies]
+lazy_static = "0.2.8"
+lalrpop-util = "0.13.0"
+regex = "0.2.1"

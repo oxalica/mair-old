@@ -1,7 +1,6 @@
-pub mod token;
 pub mod ast;
-pub mod grammar;
-pub use self::token::tokenize;
+pub mod lexer;
+// pub mod grammar;
 
 /// Get item offset of b from a, similar to pointer subtraction
 /// `(const T *)a - (const T *)b` in C/C++.
@@ -25,6 +24,11 @@ pub use self::token::tokenize;
 pub fn ptr_diff<T>(a: *const T, b: *const T) -> isize {
     use std::mem::size_of;
     (a as isize - b as isize) / size_of::<T>() as isize
+}
+
+/// The same as `ptr_diff()` but for `&str`.
+pub fn str_ptr_diff(a: &str, b: &str) -> isize {
+    ptr_diff(a.as_ptr(), b.as_ptr())
 }
 
 /// Generate a map from character indices to line and column numbers,
