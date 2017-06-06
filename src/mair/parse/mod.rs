@@ -1,6 +1,6 @@
 pub mod ast;
 pub mod lexer;
-// pub mod grammar;
+pub mod grammar;
 
 /// Get item offset of b from a, similar to pointer subtraction
 /// `(const T *)a - (const T *)b` in C/C++.
