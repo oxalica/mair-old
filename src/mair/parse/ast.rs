@@ -1,3 +1,6 @@
+use super::lexer::Keyword;
+use super::lexer::NumType;
+
 /// A module, or a crate, as well as a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Mod<'a> {
@@ -165,5 +168,66 @@ pub enum Attr<'a> {
 pub type FuncBody<'a> = Vec<Token<'a>>;
 pub type Expr<'a> = Vec<Token<'a>>;
 
+/// A token or the root of a token tree.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Token<'a>(&'a ()); // TODO
+pub enum Token<'a> {
+    /// A token tree delimited with `()`, `[]` or `{}`.
+    Delimited(Delimiter, Vec<Token<'a>>),
+    /// An keyword.
+    Keyword(Keyword),
+    /// An identifier.
+    Ident(&'a str),
+    /// A lifetime.
+    Lifetime(&'a str),
+    /// A symbol(can't be a delimiter), always the longest. For example, `>>` will be always
+    /// parsed into a single `Symbol` rather than 2 `>`s, even though it's a part of template.
+    Symbol(&'static str),
+    /// A literal.
+    Literal(LiteralType),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Delimiter {
+    /// `()`
+    Paren,
+    /// `[]`
+    Bracket,
+    /// `{}`
+    Brace,
+}
+
+/// The type of literal. There's not bool because bool literals(`true` and `false`) will be
+/// parsed into a `Token::Keyword` instead of a `Token::Literal`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum LiteralType {
+    /// A byte literal. eg. `b'a'`
+    Byte,
+    /// A char literal. eg. `'a'`
+    Char,
+    /// A string or raw string literal. eg. `"a"`, `r#"""#`
+    Str,
+    /// A byte string or byte raw string literal. eg. `b"a"`, `br"a"`
+    ByteStr,
+    /// A number literal with type suffix. eg. `0x20usize`, `1e2f64`
+    TypedNum(NumType),
+    /// A integer number literal without type suffix. eg. `0`, `0b11`
+    Integer,
+    /// A float number literal without type suffix. eg. `1e300`, `0.1`
+    Float,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum OperatorType {
+    // https://doc.rust-lang.org/grammar.html#unary-operator-expressions
+    Neg, Deref, Not,
+
+    // https://doc.rust-lang.org/grammar.html#binary-operator-expressions
+    Plus, Sub, Mul, Div, Mod,
+    And, Or, Xor, Shl, Shr,
+    LogAnd, LogOr,
+    Equ, Ne, Lt, Gt, Le, Ge,
+    As,
+    Assign,
+    AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
+    AndAssign, OrAssign, XorAssign, ShlAssign, ShrAssign,
+}
