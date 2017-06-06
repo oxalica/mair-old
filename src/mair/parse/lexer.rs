@@ -2,6 +2,7 @@ use std::ops::Range;
 use std::collections::HashMap;
 use regex::{Regex, escape};
 use super::str_ptr_diff;
+use super::ast::LiteralType;
 use self::LiteralType::*;
 
 pub type Pos = usize;
@@ -68,9 +69,6 @@ macro_rules! define_symbols(
                 arr.sort_by_key(|s| -(s.len() as isize));
                 arr.iter().clone().map(|s| escape(s)).collect::<Vec<_>>().join("|")
             };
-            static ref RE_SYMBOL: Regex = Regex::new(
-                &format!(r"\A(?:{})", *RESTR_SYMBOLS)
-            ).unwrap();
         }
      };
 );
@@ -132,6 +130,9 @@ define_symbols!{
     Colon       = ":";
     ColonColon  = "::";
     Bang        = "!";
+    LArrow      = "<-";
+    RArrow      = "->";
+    RFatArrow   = "=>";
 
     Add         = "+";
     Sub         = "-";
@@ -163,6 +164,12 @@ define_symbols!{
     ShlEq       = "<<=";
     // ShrEq       = ">>="; `let _: Vec<Vec<_>>=_;`
 } // define_symbols!
+
+lazy_static! {
+    static ref RE_AMBIG_NEXT: Regex = Regex::new(
+        r"\A(?:>|=)"
+    ).unwrap();
+}
 
 define_keywords! {
     // https://doc.rust-lang.org/grammar.html#keywords
@@ -378,7 +385,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     },
                     m if is("symbol")               => {
                         let tokty = SYMBOLS[m];
-                        if tokty == LexSymbol::Gt && RE_SYMBOL.is_match(&self.rest) {
+                        if tokty == LexSymbol::Gt && RE_AMBIG_NEXT.is_match(&self.rest) {
                             Some(AmbigGt)
                         } else {
                             Some(Symbol(tokty))
