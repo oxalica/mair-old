@@ -12,7 +12,9 @@ pub enum TokenType {
     InnerDoc,
     /// An outer document excluding comment tags. `/// ...` or `/** ... */`.
     OuterDoc,
-    /// An identifier, keyword or `_`.
+    /// A keyword.
+    Keyword(KeywordType),
+    /// An identifier or `_`.
     Ident,
     /// A lifetime excluding leading `'`.
     Lifetime,
@@ -45,7 +47,7 @@ impl<P> LexicalError<P> {
 }
 
 macro_rules! define_symbols(
-    ($($cat:ident {$($tok:ident = $ch:expr;)+})+) => {
+    ($($cat:ident {$($tok:ident = $s:expr;)+})+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
         enum SymbolCategory {
             $($cat,)+
@@ -55,19 +57,38 @@ macro_rules! define_symbols(
         pub enum SymbolType {
             $($($tok,)+)+
         }
+
         lazy_static! {
             static ref SYMBOLS: HashMap<&'static str, (SymbolCategory, SymbolType)> = {
                 let mut m = HashMap::new();
-                $($(m.insert($ch, (SymbolCategory::$cat, SymbolType::$tok));)+)+
+                $($(m.insert($s, (SymbolCategory::$cat, SymbolType::$tok));)+)+
                 m
             };
-            static ref RESTR_SYMBOLS: String = [$($(escape($ch),)+)+].join("|");
+            static ref RESTR_SYMBOLS: String = [$($(escape($s),)+)+].join("|");
             static ref RE_SYMBOL: Regex = Regex::new(
                 &format!(r"\A(?:{})", *RESTR_SYMBOLS)
             ).unwrap();
         }
      };
 );
+
+macro_rules! define_keywords {
+    ($($kw:ident = $s:expr;)+) => {
+        #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+        pub enum KeywordType {
+            $($kw,)+
+        }
+
+        lazy_static! {
+            static ref KEYWORDS: HashMap<&'static str, KeywordType> = {
+                let mut m = HashMap::new();
+                $(m.insert($s, KeywordType::$kw);)+
+                m
+            };
+            static ref RESTR_KEYWORDS: String = [$(escape($s),)+].join("|");
+        }
+    };
+}
 
 define_symbols!{
     Single {
@@ -107,6 +128,62 @@ define_symbols!{
     }
 } // define_symbols!
 
+define_keywords! {
+    // https://doc.rust-lang.org/grammar.html#keywords
+    KwAbstract  = "abstract";
+    KwAlignof   = "alignof";
+    KwAs        = "as";
+    KwBecome    = "become";
+    KwBox       = "box";
+    KwBreak     = "break";
+    KwConst     = "const";
+    KwContinue  = "continue";
+    KwCrate     = "crate";
+    KwDo        = "do";
+    KwElse      = "else";
+    KwEnum      = "enum";
+    KwExtern    = "extern";
+    KwFalse     = "false";
+    KwFinal     = "final";
+    KwFn        = "fn";
+    KwFor       = "for";
+    KwIf        = "if";
+    KwImpl      = "impl";
+    KwIn        = "in";
+    KwLet       = "let";
+    KwLoop      = "loop";
+    KwMacro     = "macro";
+    KwMatch     = "match";
+    KwMod       = "mod";
+    KwMove      = "move";
+    KwMut       = "mut";
+    KwOffsetof  = "offsetof";
+    KwOverride  = "override";
+    KwPriv      = "priv";
+    KwProc      = "proc";
+    KwPub       = "pub";
+    KwPure      = "pure";
+    KwRef       = "ref";
+    KwReturn    = "return";
+    KwSelfTy    = "Self";
+    KwSelfVar   = "self";
+    KwSizeof    = "sizeof";
+    KwStatic    = "static";
+    KwStruct    = "struct";
+    KwSuper     = "super";
+    KwTrait     = "trait";
+    KwTrue      = "true";
+    KwType      = "type";
+    KwTypeof    = "typeof";
+    KwUnsafe    = "unsafe";
+    KwUnsized   = "unsized";
+    KwUse       = "use";
+    KwVirtual   = "virtual";
+    KwWhere     = "where";
+    KwWhile     = "while";
+    KwYield     = "yield";
+} // define_keywords!
+
 lazy_static! {
     static ref RE_MAIN: Regex = Regex::new(&format!(r#"(?xsm)\A(?:
         (?P<line_innerdoc>//!.*?$)|
@@ -127,9 +204,10 @@ lazy_static! {
             )
         )')|
         (?P<lifetime>'[A-Za-z_]\w*)|
-        (?P<symbol>{})|
+        (?P<symbol>{symbols})|
+        (?P<keyword>(?:{keywords})\b)|
         (?P<ident>[A-Za-z_]\w*)
-    )"#, *RESTR_SYMBOLS)).unwrap();
+    )"#, symbols=*RESTR_SYMBOLS, keywords=*RESTR_KEYWORDS)).unwrap();
     static ref RE_BLOCK_COMMENT_BEGIN_END: Regex = Regex::new(
         r"(?s).*?(?:(?P<begin>/\*)|\*/)",
     ).unwrap();
@@ -201,6 +279,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     _ if is("line_outerdoc")        => Some(OuterDoc),
                     _ if is("line_comment")         => None,
                     _ if is("lifetime")             => Some(Lifetime),
+                    m if is("keyword")              => Some(Keyword(KEYWORDS[m])),
                     _ if is("ident")                => Some(Ident),
                     _ if is("num") || is("char")    => Some(Literal),
                     _ if is("string")               => {
@@ -288,6 +367,7 @@ impl<'input> Iterator for Lexer<'input> {
 mod test {
     use super::*;
     use self::TokenType::*;
+    use self::KeywordType::*;
     use self::LexicalError::*;
 
     fn lex(input: &str) -> Result<Vec<(TokenType, Loc)>, LexicalError<usize>> {
@@ -300,9 +380,11 @@ mod test {
     }
 
     #[test]
-    fn lexer_ident() {
-        assert_eq!(lex("a"),        Ok(vec![(Ident, 0..1)]));
+    fn lexer_keyword_ident() {
         assert_eq!(lex("_"),        Ok(vec![(Ident, 0..1)]));
+        assert_eq!(lex("a"),        Ok(vec![(Ident, 0..1)]));
+        assert_eq!(lex("as"),       Ok(vec![(Keyword(KwAs), 0..2)]));
+        assert_eq!(lex("asc"),      Ok(vec![(Ident, 0..3)]));
         assert_eq!(lex("a0__c_"),   Ok(vec![(Ident, 0..6)]));
         assert_eq!(lex("_9 a0"),    Ok(vec![(Ident, 0..2), (Ident, 3..5)]));
     }
