@@ -7,7 +7,7 @@ pub type Pos = usize;
 pub type Loc = Range<Pos>;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum TokenType {
+pub enum LexTokenType {
     /// An inner document excluding comment tags. `//! ...` or `/*! ... */`.
     InnerDoc,
     /// An outer document excluding comment tags. `/// ...` or `/** ... */`.
@@ -21,10 +21,10 @@ pub enum TokenType {
     /// A char, string or number literal.
     Literal,
     /// A minimal symbol which never be the head of any compound symbol.
-    Symbol(SymbolType),
+    Symbol(LexSymbolType),
     /// A symbol which may be the head of a compound symbol. Like `:` can be the head of `::`.
     /// Only be used for symbols followed by another symbol.
-    HeadSymbol(SymbolType),
+    HeadSymbol(LexSymbolType),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -54,14 +54,14 @@ macro_rules! define_symbols(
         }
 
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-        pub enum SymbolType {
+        pub enum LexSymbolType {
             $($($tok,)+)+
         }
 
         lazy_static! {
-            static ref SYMBOLS: HashMap<&'static str, (SymbolCategory, SymbolType)> = {
+            static ref SYMBOLS: HashMap<&'static str, (SymbolCategory, LexSymbolType)> = {
                 let mut m = HashMap::new();
-                $($(m.insert($s, (SymbolCategory::$cat, SymbolType::$tok));)+)+
+                $($(m.insert($s, (SymbolCategory::$cat, LexSymbolType::$tok));)+)+
                 m
             };
             static ref RESTR_SYMBOLS: String = [$($(escape($s),)+)+].join("|");
@@ -213,7 +213,7 @@ lazy_static! {
     ).unwrap();
 }
 
-/// An iterator over `str` producing `Some(TokenType)` for token or `None` for comment.
+/// An iterator over `str` producing `Some(LexTokenType)` for token or `None` for comment.
 struct Tokenizer<'input> {
     rest: &'input str,
 }
@@ -259,10 +259,10 @@ impl<'input> Tokenizer<'input> {
 }
 
 impl<'input> Iterator for Tokenizer<'input> {
-    type Item = Result<Option<(TokenType, &'input str)>, LexicalError<&'input str>>;
+    type Item = Result<Option<(LexTokenType, &'input str)>, LexicalError<&'input str>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        use self::TokenType::*;
+        use self::LexTokenType::*;
         use self::LexicalError::*;
 
         let slast = self.rest.trim_left();
@@ -346,7 +346,7 @@ impl<'input> Lexer<'input> {
 }
 
 impl<'input> Iterator for Lexer<'input> {
-    type Item = Result<(Pos, TokenType, Pos), LexicalError<usize>>;
+    type Item = Result<(Pos, LexTokenType, Pos), LexicalError<usize>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -366,11 +366,11 @@ impl<'input> Iterator for Lexer<'input> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use self::TokenType::*;
+    use self::LexTokenType::*;
     use self::KeywordType::*;
     use self::LexicalError::*;
 
-    fn lex(input: &str) -> Result<Vec<(TokenType, Loc)>, LexicalError<usize>> {
+    fn lex(input: &str) -> Result<Vec<(LexTokenType, Loc)>, LexicalError<usize>> {
         let mut v = vec![];
         for c in Lexer::new(input) {
             let (l, tok, r) = c?;
@@ -469,8 +469,8 @@ mod test {
             };
             expect.push((tokty, source.len()..source.len() + 1));
             source += &k;
-            if symty == SymbolType::Div { // avoid `//`
-                expect.push((Symbol(SymbolType::Equ), source.len()..source.len() + 1));
+            if symty == LexSymbolType::Div { // avoid `//`
+                expect.push((Symbol(LexSymbolType::Equ), source.len()..source.len() + 1));
                 source += "=";
             } else {
                 expect.push((Symbol(symty), source.len()..source.len() + 1));
