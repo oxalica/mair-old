@@ -7,21 +7,21 @@ pub type Pos = usize;
 pub type Loc = Range<Pos>;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum LexTokenType {
+pub enum LexToken<'input> {
     /// An inner document excluding comment tags. `//! ...` or `/*! ... */`.
     InnerDoc,
     /// An outer document excluding comment tags. `/// ...` or `/** ... */`.
     OuterDoc,
     /// A keyword.
-    Keyword(KeywordType),
+    Keyword(Keyword),
     /// An identifier or `_`.
-    Ident,
+    Ident(&'input str),
     /// A lifetime excluding leading `'`.
-    Lifetime,
+    Lifetime(&'input str),
     /// A char, string or number literal.
     Literal,
     /// A symbol.
-    Symbol(LexSymbolType),
+    Symbol(LexSymbol),
     /// The ambiguous symbol `>` followed another symbol. eg. `>>` will be parsed into
     /// an `AmbigGt` and a normal `Symbol`, for that the first `>` can be either the end of
     /// template or a bitwise right shift operator when combining the following `>`.
@@ -50,14 +50,14 @@ impl<P> LexicalError<P> {
 macro_rules! define_symbols(
     ($($tok:ident = $s:expr;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-        pub enum LexSymbolType {
+        pub enum LexSymbol {
             $($tok,)+
         }
 
         lazy_static! {
-            static ref SYMBOLS: HashMap<&'static str, LexSymbolType> = {
+            static ref SYMBOLS: HashMap<&'static str, LexSymbol> = {
                 let mut m = HashMap::new();
-                $(m.insert($s, LexSymbolType::$tok);)+
+                $(m.insert($s, LexSymbol::$tok);)+
                 m
             };
             static ref RESTR_SYMBOLS: String = {
@@ -75,14 +75,14 @@ macro_rules! define_symbols(
 macro_rules! define_keywords {
     ($($kw:ident = $s:expr;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-        pub enum KeywordType {
+        pub enum Keyword {
             $($kw,)+
         }
 
         lazy_static! {
-            static ref KEYWORDS: HashMap<&'static str, KeywordType> = {
+            static ref KEYWORDS: HashMap<&'static str, Keyword> = {
                 let mut m = HashMap::new();
-                $(m.insert($s, KeywordType::$kw);)+
+                $(m.insert($s, Keyword::$kw);)+
                 m
             };
             static ref RESTR_KEYWORDS: String = [$(escape($s),)+].join("|");
@@ -229,7 +229,7 @@ lazy_static! {
     ).unwrap();
 }
 
-/// An iterator over `str` producing `Some(LexTokenType)` for token or `None` for comment.
+/// An iterator over `str` producing `Some(LexToken)` for token or `None` for comment.
 struct Tokenizer<'input> {
     rest: &'input str,
 }
@@ -275,10 +275,10 @@ impl<'input> Tokenizer<'input> {
 }
 
 impl<'input> Iterator for Tokenizer<'input> {
-    type Item = Result<Option<(LexTokenType, &'input str)>, LexicalError<&'input str>>;
+    type Item = Result<Option<(LexToken<'input>, &'input str)>, LexicalError<&'input str>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        use self::LexTokenType::*;
+        use self::LexToken::*;
         use self::LexicalError::*;
 
         let slast = self.rest.trim_left();
@@ -294,9 +294,9 @@ impl<'input> Iterator for Tokenizer<'input> {
                     _ if is("line_innerdoc")        => Some(InnerDoc),
                     _ if is("line_outerdoc")        => Some(OuterDoc),
                     _ if is("line_comment")         => None,
-                    _ if is("lifetime")             => Some(Lifetime),
+                    m if is("lifetime")             => Some(Lifetime(&m[1..])),
                     m if is("keyword")              => Some(Keyword(KEYWORDS[m])),
-                    _ if is("ident")                => Some(Ident),
+                    m if is("ident")                => Some(Ident(m)),
                     _ if is("num") || is("char")    => Some(Literal),
                     _ if is("string")               => {
                         if is("string_closed") {
@@ -324,7 +324,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     },
                     m if is("symbol")               => {
                         let tokty = SYMBOLS[m];
-                        if tokty == LexSymbolType::Gt && RE_SYMBOL.is_match(&self.rest) {
+                        if tokty == LexSymbol::Gt && RE_SYMBOL.is_match(&self.rest) {
                             Some(AmbigGt)
                         } else {
                             Some(Symbol(tokty))
@@ -365,7 +365,7 @@ impl<'input> Lexer<'input> {
 }
 
 impl<'input> Iterator for Lexer<'input> {
-    type Item = Result<(Pos, LexTokenType, Pos), LexicalError<usize>>;
+    type Item = Result<(Pos, LexToken<'input>, Pos), LexicalError<usize>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -385,12 +385,12 @@ impl<'input> Iterator for Lexer<'input> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use self::LexTokenType::*;
-    use self::KeywordType::*;
-    use self::LexSymbolType::*;
-    use self::LexicalError::*;
+    use super::LexToken::*;
+    use super::Keyword::*;
+    use super::LexSymbol::*;
+    use super::LexicalError::*;
 
-    fn lex(input: &str) -> Result<Vec<(LexTokenType, Loc)>, LexicalError<usize>> {
+    fn lex<'a>(input: &'a str) -> Result<Vec<(LexToken<'a>, Loc)>, LexicalError<usize>> {
         let mut v = vec![];
         for c in Lexer::new(input) {
             let (l, tok, r) = c?;
@@ -401,26 +401,26 @@ mod test {
 
     #[test]
     fn lexer_keyword_ident() {
-        assert_eq!(lex("_"),        Ok(vec![(Ident, 0..1)]));
-        assert_eq!(lex("a"),        Ok(vec![(Ident, 0..1)]));
+        assert_eq!(lex("_"),        Ok(vec![(Ident("_"), 0..1)]));
+        assert_eq!(lex("a"),        Ok(vec![(Ident("a"), 0..1)]));
         assert_eq!(lex("as"),       Ok(vec![(Keyword(KwAs), 0..2)]));
-        assert_eq!(lex("asc"),      Ok(vec![(Ident, 0..3)]));
-        assert_eq!(lex("a0__c_"),   Ok(vec![(Ident, 0..6)]));
-        assert_eq!(lex("_9 a0"),    Ok(vec![(Ident, 0..2), (Ident, 3..5)]));
+        assert_eq!(lex("asc"),      Ok(vec![(Ident("asc"), 0..3)]));
+        assert_eq!(lex("a0__c_"),   Ok(vec![(Ident("a0__c_"), 0..6)]));
+        assert_eq!(lex("_9 a0"),    Ok(vec![(Ident("_9"), 0..2), (Ident("a0"), 3..5)]));
     }
 
     #[test]
     fn lexer_space_comment_doc() {
         assert_eq!(lex("     "),    Ok(vec![]));
         assert_eq!(lex(" /**/\t"),  Ok(vec![]));
-        assert_eq!(lex("a/* */a"),  Ok(vec![(Ident, 0..1), (Ident, 6..7)]));
-        assert_eq!(lex("a// /*a"),  Ok(vec![(Ident, 0..1)]));
-        assert_eq!(lex("a//\na"),   Ok(vec![(Ident, 0..1), (Ident, 4..5)]));
+        assert_eq!(lex("a/* */a"),  Ok(vec![(Ident("a"), 0..1), (Ident("a"), 6..7)]));
+        assert_eq!(lex("a// /*a"),  Ok(vec![(Ident("a"), 0..1)]));
+        assert_eq!(lex("a//\na"),   Ok(vec![(Ident("a"), 0..1), (Ident("a"), 4..5)]));
 
-        assert_eq!(lex("a/*/**/*/a"),                   Ok(vec![(Ident, 0..1), (Ident, 9..10)]));
-        assert_eq!(lex("a/*/**//*/**/*/*/a"),           Ok(vec![(Ident, 0..1), (Ident, 17..18)]));
-        assert_eq!(lex("a/*/*/*/*/**/*/*/*/*/a"),       Ok(vec![(Ident, 0..1), (Ident, 21..22)]));
-        assert_eq!(lex(r#"a/*0/**/"/*'/*/ */*/#*/ a"#), Ok(vec![(Ident, 0..1), (Ident, 24..25)]));
+        assert_eq!(lex("a/*/**/*/a"),                   Ok(vec![(Ident("a"), 0..1), (Ident("a"), 9..10)]));
+        assert_eq!(lex("a/*/**//*/**/*/*/a"),           Ok(vec![(Ident("a"), 0..1), (Ident("a"), 17..18)]));
+        assert_eq!(lex("a/*/*/*/*/**/*/*/*/*/a"),       Ok(vec![(Ident("a"), 0..1), (Ident("a"), 21..22)]));
+        assert_eq!(lex(r#"a/*0/**/"/*'/*/ */*/#*/ a"#), Ok(vec![(Ident("a"), 0..1), (Ident("a"), 24..25)]));
 
         assert_eq!(lex(" /*"),                              Err(UnclosedComment(1)));
         assert_eq!(lex("/*/**/*//**"),                      Err(UnclosedComment(8)));
@@ -433,7 +433,7 @@ mod test {
         assert_eq!(lex("/****/"),   Ok(vec![]));
         assert_eq!(lex("/*** */"),  Ok(vec![]));
         assert_eq!(lex("///"),      Ok(vec![(OuterDoc, 0..3)]));
-        assert_eq!(lex("///a\nb"),  Ok(vec![(OuterDoc, 0..4), (Ident, 5..6)]));
+        assert_eq!(lex("///a\nb"),  Ok(vec![(OuterDoc, 0..4), (Ident("b"), 5..6)]));
         assert_eq!(lex("//!"),      Ok(vec![(InnerDoc, 0..3)]));
         assert_eq!(lex("//! x"),    Ok(vec![(InnerDoc, 0..5)]));
         assert_eq!(lex("/*! a */"), Ok(vec![(InnerDoc, 0..8)]));
@@ -463,7 +463,7 @@ mod test {
         assert_eq!(lex(r#" "\" "#),         Err(UnterminatedString(1)));
         assert_eq!(lex(r#" br#"" "#),       Err(UnterminatedString(1)));
 
-        assert_eq!(lex("'a'a"),             Ok(vec![(Literal, 0..3), (Ident, 3..4)]));
+        assert_eq!(lex("'a'a"),             Ok(vec![(Literal, 0..3), (Ident("a"), 3..4)]));
         assert_eq!(lex("'劲'"),             Ok(vec![(Literal, 0..2+"劲".len())]));
         assert_eq!(lex(r"'\x00'"),          Ok(vec![(Literal, 0..6)]));
         assert_eq!(lex(r"'\''"),            Ok(vec![(Literal, 0..4)]));
@@ -474,8 +474,8 @@ mod test {
         assert!(lex(r"'\u{}'") != Ok(vec![(Literal, 0..6)]));
         assert!(lex(r"'\x0'")  != Ok(vec![(Literal, 0..5)]));
 
-        assert_eq!(lex("'a 'a"),    Ok(vec![(Lifetime, 0..2), (Lifetime, 3..5)]));
-        assert_eq!(lex("'_1a"),     Ok(vec![(Lifetime, 0..4)]));
+        assert_eq!(lex("'a 'a"),    Ok(vec![(Lifetime("a"), 0..2), (Lifetime("a"), 3..5)]));
+        assert_eq!(lex("'_1a"),     Ok(vec![(Lifetime("_1a"), 0..4)]));
     }
 
     #[test]
