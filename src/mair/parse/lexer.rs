@@ -20,11 +20,12 @@ pub enum LexTokenType {
     Lifetime,
     /// A char, string or number literal.
     Literal,
-    /// A minimal symbol which never be the head of any compound symbol.
+    /// A symbol.
     Symbol(LexSymbolType),
-    /// A symbol which may be the head of a compound symbol. Like `:` can be the head of `::`.
-    /// Only be used for symbols followed by another symbol.
-    HeadSymbol(LexSymbolType),
+    /// The ambiguous symbol `>` followed another symbol. eg. `>>` will be parsed into
+    /// an `AmbigGt` and a normal `Symbol`, for that the first `>` can be either the end of
+    /// template or a bitwise right shift operator when combining the following `>`.
+    AmbigGt,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -47,24 +48,23 @@ impl<P> LexicalError<P> {
 }
 
 macro_rules! define_symbols(
-    ($($cat:ident {$($tok:ident = $s:expr;)+})+) => {
-        #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-        enum SymbolCategory {
-            $($cat,)+
-        }
-
+    ($($tok:ident = $s:expr;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
         pub enum LexSymbolType {
-            $($($tok,)+)+
+            $($tok,)+
         }
 
         lazy_static! {
-            static ref SYMBOLS: HashMap<&'static str, (SymbolCategory, LexSymbolType)> = {
+            static ref SYMBOLS: HashMap<&'static str, LexSymbolType> = {
                 let mut m = HashMap::new();
-                $($(m.insert($s, (SymbolCategory::$cat, LexSymbolType::$tok));)+)+
+                $(m.insert($s, LexSymbolType::$tok);)+
                 m
             };
-            static ref RESTR_SYMBOLS: String = [$($(escape($s),)+)+].join("|");
+            static ref RESTR_SYMBOLS: String = {
+                let mut arr = [$($s,)+];
+                arr.sort_by_key(|s| -(s.len() as isize));
+                arr.iter().clone().map(|s| escape(s)).collect::<Vec<_>>().join("|")
+            };
             static ref RE_SYMBOL: Regex = Regex::new(
                 &format!(r"\A(?:{})", *RESTR_SYMBOLS)
             ).unwrap();
@@ -91,41 +91,57 @@ macro_rules! define_keywords {
 }
 
 define_symbols!{
-    Single {
-        LBracket    = "[";
-        RBracket    = "]";
-        LParen      = "(";
-        RParen      = ")";
-        LBrace      = "{";
-        RBrace      = "}";
-        Comma       = ",";
-        Semi        = ";";
-        At          = "@";
-        Hash        = "#";
-        Dollar      = "$";
-        Question    = "?";
-    }
-    Multi {
-        Dot         = "."; // `..` `...`
-        Colon       = ":"; // `::`
+    // https://doc.rust-lang.org/grammar.html#symbols
+    // https://doc.rust-lang.org/grammar.html#unary-operator-expressions
 
-        Bang        = "!"; // `!=`
+    LBracket    = "[";
+    RBracket    = "]";
+    LParen      = "(";
+    RParen      = ")";
+    LBrace      = "{";
+    RBrace      = "}";
+    Comma       = ",";
+    Semi        = ";";
+    At          = "@";
+    Hash        = "#";
+    Dollar      = "$";
+    Question    = "?";
+    Dot         = ".";
+    DotDot      = "..";
+    DotDotDot   = "...";
+    Colon       = ":";
+    ColonColon  = "::";
+    Bang        = "!";
 
-        Add         = "+"; // `+=`
-        Sub         = "-"; // `-=`
-        Mul         = "*"; // `*=`
-        Div         = "/"; // `/=`
-        Mod         = "%"; // `%=`
-
-        And         = "&"; // `&&` `&=`
-        Or          = "|"; // `||` `|=`
-        Xor         = "^"; // `^=`
-
-        Lt          = "<"; // `<=` `<<` `<<=`
-        Gt          = ">"; // `>=` `>>` `>>=`
-
-        Equ         = "="; // `==`
-    }
+    Add         = "+";
+    Sub         = "-";
+    Mul         = "*";
+    Div         = "/";
+    Mod         = "%";
+    And         = "&";
+    Or          = "|";
+    Xor         = "^";
+    Shl         = "<<";
+    // Shr         = ">>"; `Vec<Vec<_>>`
+    AndAnd      = "&&";
+    OrOr        = "||";
+    EqEq        = "==";
+    Ne          = "!=";
+    Lt          = "<";
+    Gt          = ">";
+    Le          = "<=";
+    // Ge          = ">="; `let _: Vec<_>=_;`
+    Eq          = "=";
+    AddEq       = "+=";
+    SubEq       = "-=";
+    MulEq       = "*=";
+    DivEq       = "/=";
+    ModEq       = "%=";
+    AndEq       = "&=";
+    OrEq        = "|=";
+    XorEq       = "^=";
+    ShlEq       = "<<=";
+    // ShrEq       = ">>="; `let _: Vec<Vec<_>>=_;`
 } // define_symbols!
 
 define_keywords! {
@@ -306,10 +322,13 @@ impl<'input> Iterator for Tokenizer<'input> {
                         self.eat_raw_string(cap["raw_string_hashes"].len())?;
                         Some(Literal)
                     },
-                    m if is("symbol")               => match SYMBOLS[m] {
-                        (SymbolCategory::Multi, tokty) if RE_SYMBOL.is_match(&self.rest)
-                                   => Some(HeadSymbol(tokty)),
-                        (_, tokty) => Some(Symbol(tokty)),
+                    m if is("symbol")               => {
+                        let tokty = SYMBOLS[m];
+                        if tokty == LexSymbolType::Gt && RE_SYMBOL.is_match(&self.rest) {
+                            Some(AmbigGt)
+                        } else {
+                            Some(Symbol(tokty))
+                        }
                     },
                     _ => unreachable!(),
                 })
@@ -368,6 +387,7 @@ mod test {
     use super::*;
     use self::LexTokenType::*;
     use self::KeywordType::*;
+    use self::LexSymbolType::*;
     use self::LexicalError::*;
 
     fn lex(input: &str) -> Result<Vec<(LexTokenType, Loc)>, LexicalError<usize>> {
@@ -462,24 +482,16 @@ mod test {
     fn lexer_symbol() {
         let mut source = String::new();
         let mut expect = vec![];
-        for (k, &(cat, symty)) in SYMBOLS.iter() {
-            let tokty = match cat {
-                SymbolCategory::Single => Symbol(symty),
-                SymbolCategory::Multi  => HeadSymbol(symty),
-            };
-            expect.push((tokty, source.len()..source.len() + 1));
+        for (k, &symty) in SYMBOLS.iter() {
+            expect.push((Symbol(symty), source.len()..source.len() + k.len()));
             source += &k;
-            if symty == LexSymbolType::Div { // avoid `//`
-                expect.push((Symbol(LexSymbolType::Equ), source.len()..source.len() + 1));
-                source += "=";
-            } else {
-                expect.push((Symbol(symty), source.len()..source.len() + 1));
-                source += &k;
-            }
-            source += " ";
+            source.push(' ');
         }
         println!("testing: `{}`", source);
-        assert_eq!(lex(&source), Ok(expect));
+        assert_eq!(lex(&source),    Ok(expect));
+        assert_eq!(lex(">"),        Ok(vec![(Symbol(Gt), 0..1)]));
+        assert_eq!(lex("> "),       Ok(vec![(Symbol(Gt), 0..1)]));
+        assert_eq!(lex(">>"),       Ok(vec![(AmbigGt, 0..1), (Symbol(Gt), 1..2)]));
     }
 
     #[test]
