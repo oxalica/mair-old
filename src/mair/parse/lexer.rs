@@ -21,6 +21,7 @@ pub enum TokenType {
     /// A minimal symbol which never be the head of any compound symbol.
     Symbol(SymbolType),
     /// A symbol which may be the head of a compound symbol. Like `:` can be the head of `::`.
+    /// Only be used for symbols followed by another symbol.
     HeadSymbol(SymbolType),
 }
 
@@ -61,6 +62,9 @@ macro_rules! define_symbols(
                 m
             };
             static ref RESTR_SYMBOLS: String = [$($(escape($ch),)+)+].join("|");
+            static ref RE_SYMBOL: Regex = Regex::new(
+                &format!(r"\A(?:{})", *RESTR_SYMBOLS)
+            ).unwrap();
         }
      };
 );
@@ -224,8 +228,9 @@ impl<'input> Iterator for Tokenizer<'input> {
                         Some(Literal)
                     },
                     m if is("symbol")               => match SYMBOLS[m] {
-                        (SymbolCategory::Single, tokty) => Some(Symbol(tokty)),
-                        (SymbolCategory::Multi,  tokty) => Some(HeadSymbol(tokty)),
+                        (SymbolCategory::Multi, tokty) if RE_SYMBOL.is_match(&self.rest)
+                                   => Some(HeadSymbol(tokty)),
+                        (_, tokty) => Some(Symbol(tokty)),
                     },
                     _ => unreachable!(),
                 })
@@ -375,14 +380,23 @@ mod test {
     fn lexer_symbol() {
         let mut source = String::new();
         let mut expect = vec![];
-        for (i, (k, &(cat, symty))) in SYMBOLS.iter().enumerate() {
-            source += &k;
+        for (k, &(cat, symty)) in SYMBOLS.iter() {
             let tokty = match cat {
                 SymbolCategory::Single => Symbol(symty),
                 SymbolCategory::Multi  => HeadSymbol(symty),
             };
-            expect.push((tokty, i..i + 1));
+            expect.push((tokty, source.len()..source.len() + 1));
+            source += &k;
+            if symty == SymbolType::Div { // avoid `//`
+                expect.push((Symbol(SymbolType::Equ), source.len()..source.len() + 1));
+                source += "=";
+            } else {
+                expect.push((Symbol(symty), source.len()..source.len() + 1));
+                source += &k;
+            }
+            source += " ";
         }
+        println!("testing: `{}`", source);
         assert_eq!(lex(&source), Ok(expect));
     }
 
