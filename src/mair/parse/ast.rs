@@ -59,17 +59,17 @@ pub enum StructDetail<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StructTupleElem<'a> {
-    attrs:  Vec<Attr<'a>>,
-    is_pub: bool,
-    ty:     Ty<'a>,
+    pub attrs:  Vec<Attr<'a>>,
+    pub is_pub: bool,
+    pub ty:     Ty<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StructField<'a> {
-    attrs:  Vec<Attr<'a>>,
-    is_pub: bool,
-    name:   &'a str,
-    ty:     Ty<'a>,
+    pub attrs:  Vec<Attr<'a>>,
+    pub is_pub: bool,
+    pub name:   &'a str,
+    pub ty:     Ty<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
