@@ -235,8 +235,8 @@ define_numtype! {
 
 lazy_static! {
     static ref RE_MAIN: Regex = Regex::new(&format!(r#"(?xsm)\A(?:
-        (?P<line_innerdoc>//!.*?$)|
-        (?P<line_outerdoc>///(?:[^/].*?)??$)|
+        (?P<line_innerdoc>//!.*?(?:\z|\n))|
+        (?P<line_outerdoc>///(?:[^/].*?)??(?:\z|\n))|
         (?P<line_comment>//.*?$)|
         (?P<block_innerdoc_beg>/\*!)|
         (?P<block_outerdoc_beg_eat1>/\*\*[^*/])|
@@ -493,8 +493,8 @@ mod test {
         assert_eq!(lex("/****/"),   Ok(vec![]));
         assert_eq!(lex("/*** */"),  Ok(vec![]));
         assert_eq!(lex("///"),      Ok(vec![(OuterDoc(""), 0..3)]));
-        assert_eq!(lex("///a\nb"),  Ok(vec![(OuterDoc("a"), 0..4), (Ident("b"), 5..6)]));
-        assert_eq!(lex("//!"),      Ok(vec![(InnerDoc(""), 0..3)]));
+        assert_eq!(lex("///a\nb"),  Ok(vec![(OuterDoc("a\n"), 0..5), (Ident("b"), 5..6)]));
+        assert_eq!(lex("//!\n"),    Ok(vec![(InnerDoc("\n"), 0..4)]));
         assert_eq!(lex("//! x"),    Ok(vec![(InnerDoc(" x"), 0..5)]));
         assert_eq!(lex("/*! a */"), Ok(vec![(InnerDoc(" a "), 0..8)]));
         assert_eq!(lex("/** */"),   Ok(vec![(OuterDoc(" "), 0..6)]));
