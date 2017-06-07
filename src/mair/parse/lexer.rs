@@ -24,7 +24,7 @@ pub enum LexToken<'input> {
     Literal(LiteralType),
     /// A symbol.
     Symbol(LexSymbol),
-    /// The ambiguous symbol `>` followed another symbol. eg. `>>` will be parsed into
+    /// The ambiguous symbol `>` followed by `>` or `=`. eg. `>>` will be parsed into
     /// an `AmbigGt` and a normal `Symbol`, for that the first `>` can be either the end of
     /// template or a bitwise right shift operator when combining the following `>`.
     AmbigGt,
