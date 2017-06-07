@@ -10,10 +10,10 @@ pub type Loc = Range<Pos>;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum LexToken<'input> {
-    /// An inner document excluding comment tags. `//! ...` or `/*! ... */`.
-    InnerDoc,
-    /// An outer document excluding comment tags. `/// ...` or `/** ... */`.
-    OuterDoc,
+    /// An inner document containing the content.
+    InnerDoc(&'input str),
+    /// An outer document containing the content.
+    OuterDoc(&'input str),
     /// A keyword.
     Keyword(Keyword),
     /// An identifier or `_`.
@@ -293,7 +293,9 @@ impl<'input> Tokenizer<'input> {
     }
 
     /// Consume block comment inner(without the starting tag) till the ending tag.
-    fn eat_block_comment(&mut self) -> Result<(), LexicalError<()>> {
+    /// Return the comment content.
+    fn eat_block_comment(&mut self) -> Result<&'input str, LexicalError<()>> {
+        let sbegin = self.rest;
         let mut layer = 1;
         while layer > 0 {
             if let Some(cap) = RE_BLOCK_COMMENT_BEGIN_END.captures(&self.rest) {
@@ -307,7 +309,7 @@ impl<'input> Tokenizer<'input> {
                 return Err(LexicalError::UnclosedComment(()));
             }
         }
-        Ok(())
+        Ok(&sbegin[..sbegin.len() - self.rest.len() - 2]) // excluding `*/`
     }
 
     /// Consume raw string inner(without the starting tag) till the ending tag.
@@ -339,8 +341,8 @@ impl<'input> Iterator for Tokenizer<'input> {
             let mut f = || -> Result<_, LexicalError<()>> {
                 // wrap for the carriers inside
                 Ok(match cap.get(0).unwrap().as_str() {
-                    _ if is("line_innerdoc")        => Some(InnerDoc),
-                    _ if is("line_outerdoc")        => Some(OuterDoc),
+                    m if is("line_innerdoc")        => Some(InnerDoc(&m[3..])),
+                    m if is("line_outerdoc")        => Some(OuterDoc(&m[3..])),
                     _ if is("line_comment")         => None,
                     m if is("lifetime")             => Some(Lifetime(&m[1..])),
                     m if is("keyword")              => Some(Keyword(KEYWORDS[m])),
@@ -366,14 +368,10 @@ impl<'input> Iterator for Tokenizer<'input> {
                             Some(Literal(Str))
                         }
                     },
-                    _ if is("block_innerdoc_beg")   => {
-                        self.eat_block_comment()?;
-                        Some(InnerDoc)
-                    },
+                    _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
                     _ if is("block_outerdoc_beg_eat1")  => {
                         self.rest = &slast[cap[0].len() - 1..]; // put the eaten first char back
-                        self.eat_block_comment()?;
-                        Some(OuterDoc)
+                        Some(OuterDoc(self.eat_block_comment()?))
                     },
                     _ if is("block_comment_beg")    => {
                         self.eat_block_comment()?;
@@ -494,13 +492,13 @@ mod test {
         assert_eq!(lex("/***/"),    Ok(vec![]));
         assert_eq!(lex("/****/"),   Ok(vec![]));
         assert_eq!(lex("/*** */"),  Ok(vec![]));
-        assert_eq!(lex("///"),      Ok(vec![(OuterDoc, 0..3)]));
-        assert_eq!(lex("///a\nb"),  Ok(vec![(OuterDoc, 0..4), (Ident("b"), 5..6)]));
-        assert_eq!(lex("//!"),      Ok(vec![(InnerDoc, 0..3)]));
-        assert_eq!(lex("//! x"),    Ok(vec![(InnerDoc, 0..5)]));
-        assert_eq!(lex("/*! a */"), Ok(vec![(InnerDoc, 0..8)]));
-        assert_eq!(lex("/** */"),   Ok(vec![(OuterDoc, 0..6)]));
-        assert_eq!(lex("/*!*/"),    Ok(vec![(InnerDoc, 0..5)]));
+        assert_eq!(lex("///"),      Ok(vec![(OuterDoc(""), 0..3)]));
+        assert_eq!(lex("///a\nb"),  Ok(vec![(OuterDoc("a"), 0..4), (Ident("b"), 5..6)]));
+        assert_eq!(lex("//!"),      Ok(vec![(InnerDoc(""), 0..3)]));
+        assert_eq!(lex("//! x"),    Ok(vec![(InnerDoc(" x"), 0..5)]));
+        assert_eq!(lex("/*! a */"), Ok(vec![(InnerDoc(" a "), 0..8)]));
+        assert_eq!(lex("/** */"),   Ok(vec![(OuterDoc(" "), 0..6)]));
+        assert_eq!(lex("/*!*/"),    Ok(vec![(InnerDoc(""), 0..5)]));
     }
 
     #[test]

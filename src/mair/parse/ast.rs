@@ -173,9 +173,13 @@ pub type Expr<'a> = Vec<Token<'a>>;
 pub enum Token<'a> {
     /// A token tree delimited with `()`, `[]` or `{}`.
     Delimited(Delimiter, Vec<Token<'a>>),
+    /// An inner document.
+    InnerDoc(&'a str),
+    /// An outer document.
+    OuterDoc(&'a str),
     /// An keyword.
     Keyword(Keyword),
-    /// An identifier.
+    /// An identifier or `_`.
     Ident(&'a str),
     /// A lifetime.
     Lifetime(&'a str),

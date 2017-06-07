@@ -11,8 +11,8 @@ extern {
     enum LexToken<'input> {
         IDENT       => LexToken::Ident(<&'input str>),
         LIFETIME    => LexToken::Lifetime(<&'input str>),
-        INNERDOC    => LexToken::InnerDoc,
-        OUTERDOC    => LexToken::OuterDoc,
+        INNERDOC    => LexToken::InnerDoc(<&'input str>),
+        OUTERDOC    => LexToken::OuterDoc(<&'input str>),
         LITERAL     => LexToken::Literal(<LiteralType>),
 
         ">_"        => LexToken::AmbigGt,
@@ -240,4 +240,6 @@ pub tt: Token<'input> = {
     LIFETIME        => Token::Lifetime(<>),
     symbol          => Token::Symbol(<>),
     LITERAL         => Token::Literal(<>),
+    INNERDOC        => Token::InnerDoc(<>),
+    OUTERDOC        => Token::OuterDoc(<>),
 };
