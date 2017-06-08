@@ -15,7 +15,7 @@ pub enum LexToken<'input> {
     /// An outer document containing the content.
     OuterDoc(&'input str),
     /// A keyword.
-    Keyword(Keyword),
+    Keyword(KeywordType),
     /// An identifier or `_`.
     Ident(&'input str),
     /// A lifetime excluding leading `'`.
@@ -76,14 +76,14 @@ macro_rules! define_symbols(
 macro_rules! define_keywords {
     ($($kw:ident = $s:expr;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-        pub enum Keyword {
+        pub enum KeywordType {
             $($kw,)+
         }
 
         lazy_static! {
-            static ref KEYWORDS: HashMap<&'static str, Keyword> = {
+            static ref KEYWORDS: HashMap<&'static str, KeywordType> = {
                 let mut m = HashMap::new();
-                $(m.insert($s, Keyword::$kw);)+
+                $(m.insert($s, KeywordType::$kw);)+
                 m
             };
             static ref RESTR_KEYWORDS: String = [$(escape($s),)+].join("|");
@@ -298,7 +298,7 @@ impl<'input> Tokenizer<'input> {
         let sbegin = self.rest;
         let mut layer = 1;
         while layer > 0 {
-            if let Some(cap) = RE_BLOCK_COMMENT_BEGIN_END.captures(&self.rest) {
+            if let Some(cap) = RE_BLOCK_COMMENT_BEGIN_END.captures(self.rest) {
                 self.advance(cap[0].len());
                 if cap.name("begin").is_some() {
                     layer += 1;
@@ -332,10 +332,10 @@ impl<'input> Iterator for Tokenizer<'input> {
         use self::LexicalError::*;
 
         let slast = self.rest.trim_left();
-        self.rest = &slast;
+        self.rest = slast;
         if self.rest.is_empty() {
             None
-        } else if let Some(cap) = RE_MAIN.captures(&self.rest) {
+        } else if let Some(cap) = RE_MAIN.captures(self.rest) {
             self.advance(cap[0].len());
             let is = |name| cap.name(name).is_some();
             let mut f = || -> Result<_, LexicalError<()>> {
@@ -383,7 +383,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     },
                     m if is("symbol")               => {
                         let tokty = SYMBOLS[m];
-                        if tokty == LexSymbol::Gt && RE_AMBIG_NEXT.is_match(&self.rest) {
+                        if tokty == LexSymbol::Gt && RE_AMBIG_NEXT.is_match(self.rest) {
                             Some(AmbigGt)
                         } else {
                             Some(Symbol(tokty))
@@ -398,7 +398,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                 Err(e)          => Some(Err(e.map(|()| slast))),
             }
         } else { // regex match fails
-            Some(Err(UnknowToken(&self.rest)))
+            Some(Err(UnknowToken(self.rest)))
         }
     }
 }
@@ -445,7 +445,7 @@ impl<'input> Iterator for Lexer<'input> {
 mod test {
     use super::*;
     use super::LexToken::*;
-    use super::Keyword::*;
+    use super::KeywordType::*;
     use super::LexSymbol::*;
     use super::LexicalError::*;
     use super::NumType::*;
