@@ -15,7 +15,7 @@ extern {
         LIFETIME    => Lifetime(<&'input str>),
         INNERDOC    => InnerDoc(<&'input str>),
         OUTERDOC    => OuterDoc(<&'input str>),
-        LITERAL     => Literal(<LiteralType>),
+        LITERAL     => Literal(<&'input str>),
 
         ">_"        => AmbigGt,
 

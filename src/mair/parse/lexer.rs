@@ -2,8 +2,6 @@ use std::ops::Range;
 use std::collections::HashMap;
 use regex::{Regex, escape};
 use super::str_ptr_diff;
-use super::ast::LiteralType;
-use self::LiteralType::*;
 
 pub type Pos = usize;
 pub type Loc = Range<Pos>;
@@ -21,7 +19,7 @@ pub enum LexToken<'input> {
     /// A lifetime excluding leading `'`.
     Lifetime(&'input str),
     /// A char, string or number literal.
-    Literal(LiteralType),
+    Literal(&'input str),
     /// A symbol.
     Symbol(LexSymbol),
     /// The ambiguous symbol `>` followed by `>` or `=`. eg. `>>` will be parsed into
@@ -87,23 +85,6 @@ macro_rules! define_keywords {
                 m
             };
             static ref RESTR_KEYWORDS: String = [$(escape($s),)+].join("|");
-        }
-    };
-}
-
-macro_rules! define_numtype {
-    ($($t:ident,)+) => {
-        #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-        pub enum NumType {
-            $($t,)+
-        }
-
-        lazy_static! {
-            static ref NUMTYPES: HashMap<String, NumType> = {
-                let mut m = HashMap::new();
-                $(m.insert(stringify!($t).to_lowercase(), NumType::$t);)+
-                m
-            };
         }
     };
 }
@@ -227,12 +208,6 @@ define_keywords! {
     KwYield     = "yield";
 } // define_keywords!
 
-define_numtype! {
-    I8, I16, I32, I64, Isize,
-    U8, U16, U32, U64, Usize,
-    F32, F64,
-}
-
 lazy_static! {
     static ref RE_MAIN: Regex = Regex::new(&format!(r#"(?xsm)\A(?:
         (?P<line_innerdoc>//!.*?(?:\z|\n))|
@@ -248,17 +223,15 @@ lazy_static! {
                 0x[[:xdigit:]]+|
                 (?:
                     \d[\d_]*
-                    (?P<num_float>
-                        (?:\.\d[\d_]*)?
-                        (?:[Ee][+-]?[\d_]+)?
-                    )
+                    (?:\.\d[\d_]*)?
+                    (?:[Ee][+-]?[\d_]+)?
                 )
             )
             (?P<num_suffix>\w*)
         )|
-        (?P<raw_string_beg>(?P<raw_string_byte>b)?r(?P<raw_string_hashes>\#*)")|
-        (?P<string>(?P<string_byte>b)?"[^"\\]*(?:\\.[^"\\]*)*(?P<string_closed>")?)|
-        (?P<char>(?P<char_byte>b)?'(?:
+        (?P<raw_string_beg>b?r(?P<raw_string_hashes>\#*)")|
+        (?P<string>b?"[^"\\]*(?:\\.[^"\\]*)*(?P<string_closed>")?)|
+        (?P<char>b?'(?:
             [[:^cntrl:]&&[^\\']]|
             \\(?:
                 [\\'"nrt0]|
@@ -274,6 +247,13 @@ lazy_static! {
 
     static ref RE_BLOCK_COMMENT_BEGIN_END: Regex = Regex::new(
         r"(?s).*?(?:(?P<begin>/\*)|\*/)",
+    ).unwrap();
+
+    static ref RE_NUM_SUFFIX: Regex = Regex::new(
+        r"(?x)\A(?:
+            [iu](?:8|16|32|64|size)|
+            f(?:32|64)
+        )?\z"
     ).unwrap();
 }
 
@@ -347,28 +327,22 @@ impl<'input> Iterator for Tokenizer<'input> {
                     m if is("lifetime")             => Some(Lifetime(&m[1..])),
                     m if is("keyword")              => Some(Keyword(KEYWORDS[m])),
                     m if is("ident")                => Some(Ident(m)),
-                    _ if is("char")                 =>
-                        Some(Literal(if is("char_byte") { Byte } else { Char })),
-                    _ if is("num")                  =>
-                        if !cap["num_suffix"].is_empty() {
-                            let numty = NUMTYPES.get(&cap["num_suffix"])
-                                .ok_or(InvalidNumberSuffix(()))?;
-                            Some(Literal(TypedNum(*numty)))
-                        } else if is("num_float") && !cap["num_float"].is_empty() {
-                            Some(Literal(Float))
+                    m if is("char")                 => Some(Literal(m)),
+                    _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
+                    m if is("num")                  => {
+                        if RE_NUM_SUFFIX.is_match(&cap["num_suffix"]) {
+                            Some(Literal(m))
                         } else {
-                            Some(Literal(Integer))
-                        },
-                    _ if is("string")               => {
-                        if !is("string_closed") {
-                            Err(UnterminatedString(()))?
-                        } else if is("string_byte") {
-                            Some(Literal(ByteStr))
-                        } else {
-                            Some(Literal(Str))
+                            Err(InvalidNumberSuffix(()))?
                         }
                     },
-                    _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
+                    m if is("string")               => {
+                        if !is("string_closed") {
+                            Err(UnterminatedString(()))?
+                        } else {
+                            Some(Literal(m))
+                        }
+                    },
                     _ if is("block_outerdoc_beg_eat1")  => {
                         self.rest = &slast[cap[0].len() - 1..]; // put the eaten first char back
                         Some(OuterDoc(self.eat_block_comment()?))
@@ -379,7 +353,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     },
                     _ if is("raw_string_beg")       => {
                         self.eat_raw_string(cap["raw_string_hashes"].len())?;
-                        Some(Literal(if is("raw_string_byte") { ByteStr } else { Str }))
+                        Some(Literal(&slast[..slast.len() - self.rest.len()])) // including start/end tags
                     },
                     m if is("symbol")               => {
                         let tokty = SYMBOLS[m];
@@ -448,9 +422,8 @@ mod test {
     use super::KeywordType::*;
     use super::LexSymbol::*;
     use super::LexicalError::*;
-    use super::NumType::*;
 
-    fn lex<'a>(input: &'a str) -> Result<Vec<(LexToken<'a>, Loc)>, LexicalError<usize>> {
+    fn lex(input: &str) -> Result<Vec<(LexToken, Loc)>, LexicalError<usize>> {
         let mut v = vec![];
         for c in Lexer::new(input) {
             let (l, tok, r) = c?;
@@ -503,37 +476,37 @@ mod test {
 
     #[test]
     fn lexer_literal_lifetime() {
-        assert_eq!(lex("1"),            Ok(vec![(Literal(Integer), 0..1)]));
-        assert_eq!(lex("1isize"),       Ok(vec![(Literal(TypedNum(Isize)), 0..6)]));
-        assert_eq!(lex("1__3_.2_8_"),   Ok(vec![(Literal(Float), 0..10)]));
-        assert_eq!(lex("1.2e3f32"),     Ok(vec![(Literal(TypedNum(F32)), 0..8)]));
-        assert_eq!(lex("1.2e-3"),       Ok(vec![(Literal(Float), 0..6)]));
-        assert_eq!(lex("1e+3"),         Ok(vec![(Literal(Float), 0..4)]));
-        assert_eq!(lex("0xDeAdBeEf"),   Ok(vec![(Literal(Integer), 0..10)]));
-        assert_eq!(lex("0o__1_07i8"),   Ok(vec![(Literal(TypedNum(I8)), 0..10)]));
-        assert_eq!(lex("0b__1_01"),     Ok(vec![(Literal(Integer), 0..8)]));
+        assert_eq!(lex("1"),            Ok(vec![(Literal("1"), 0..1)]));
+        assert_eq!(lex("1isize"),       Ok(vec![(Literal("1isize"), 0..6)]));
+        assert_eq!(lex("1__3_.2_8_"),   Ok(vec![(Literal("1__3_.2_8_"), 0..10)]));
+        assert_eq!(lex("1.2e3f32"),     Ok(vec![(Literal("1.2e3f32"), 0..8)]));
+        assert_eq!(lex("1.2e-3"),       Ok(vec![(Literal("1.2e-3"), 0..6)]));
+        assert_eq!(lex("1e+3"),         Ok(vec![(Literal("1e+3"), 0..4)]));
+        assert_eq!(lex("0xDeAdBeEf"),   Ok(vec![(Literal("0xDeAdBeEf"), 0..10)]));
+        assert_eq!(lex("0o__1_07i8"),   Ok(vec![(Literal("0o__1_07i8"), 0..10)]));
+        assert_eq!(lex("0b__1_01"),     Ok(vec![(Literal("0b__1_01"), 0..8)]));
 
-        assert_eq!(lex("0b21"),         Err(InvalidNumberSuffix(0)));
+        assert_eq!(lex("0b21"),         Err(InvalidNumberSuffix(0))); // suffix match `b21` and fails
         assert_eq!(lex("0b_1_2"),       Err(InvalidNumberSuffix(0))); // suffix match `2` and fails
 
-        assert_eq!(lex(r#" "\"" "#),        Ok(vec![(Literal(Str), 1..5)]));
-        assert_eq!(lex(r#" b" \" \" " "#),  Ok(vec![(Literal(ByteStr), 1..11)]));
-        assert_eq!(lex(r#" r"\" "#),        Ok(vec![(Literal(Str), 1..5)]));
-        assert_eq!(lex(r##" r#"\"# "##),    Ok(vec![(Literal(Str), 1..7)]));
+        assert_eq!(lex(r#" "\"" "#),        Ok(vec![(Literal(r#""\"""#), 1..5)]));
+        assert_eq!(lex(r#" b" \" \" " "#),  Ok(vec![(Literal(r#"b" \" \" ""#), 1..11)]));
+        assert_eq!(lex(r#" r"\" "#),        Ok(vec![(Literal(r#"r"\""#), 1..5)]));
+        assert_eq!(lex(r##" r#"\"# "##),    Ok(vec![(Literal("r#\"\\\"#"), 1..7)]));
 
         assert_eq!(lex(r#" "\" "#),         Err(UnterminatedString(1)));
         assert_eq!(lex(r#" br#"" "#),       Err(UnterminatedString(1)));
 
-        assert_eq!(lex("'a'a"),             Ok(vec![(Literal(Char), 0..3), (Ident("a"), 3..4)]));
-        assert_eq!(lex("'劲'"),             Ok(vec![(Literal(Char), 0..2+"劲".len())]));
-        assert_eq!(lex(r"b'\x00'"),         Ok(vec![(Literal(Byte), 0..7)]));
-        assert_eq!(lex(r"'\''"),            Ok(vec![(Literal(Char), 0..4)]));
-        assert_eq!(lex(r"'\\'"),            Ok(vec![(Literal(Char), 0..4)]));
-        assert_eq!(lex(r"'\u{99}'"),        Ok(vec![(Literal(Char), 0..8)]));
-        assert_eq!(lex(r"'\u{000000}'"),    Ok(vec![(Literal(Char), 0..12)]));
+        assert_eq!(lex("'a'a"),             Ok(vec![(Literal("'a'"), 0..3), (Ident("a"), 3..4)]));
+        assert_eq!(lex("'劲'"),             Ok(vec![(Literal("'劲'"), 0..2+"劲".len())]));
+        assert_eq!(lex(r"b'\x00'"),         Ok(vec![(Literal(r"b'\x00'"), 0..7)]));
+        assert_eq!(lex(r"'\''"),            Ok(vec![(Literal(r"'\''"), 0..4)]));
+        assert_eq!(lex(r"'\\'"),            Ok(vec![(Literal(r"'\\'"), 0..4)]));
+        assert_eq!(lex(r"'\u{99}'"),        Ok(vec![(Literal(r"'\u{99}'"), 0..8)]));
+        assert_eq!(lex(r"'\u{000000}'"),    Ok(vec![(Literal(r"'\u{000000}'"), 0..12)]));
 
-        assert!(lex(r"'\u{}'") != Ok(vec![(Literal(Char), 0..6)]));
-        assert!(lex(r"'\x0'")  != Ok(vec![(Literal(Char), 0..5)]));
+        assert!(lex(r"'\u{}'") != Ok(vec![(Literal(r"'\u{}'"), 0..6)]));
+        assert!(lex(r"'\x0'")  != Ok(vec![(Literal(r"'\x0'"), 0..5)]));
 
         assert_eq!(lex("'a 'a"),    Ok(vec![(Lifetime("a"), 0..2), (Lifetime("a"), 3..5)]));
         assert_eq!(lex("'_1a"),     Ok(vec![(Lifetime("_1a"), 0..4)]));
