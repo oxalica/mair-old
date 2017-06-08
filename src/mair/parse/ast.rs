@@ -1,4 +1,4 @@
-use super::lexer::Keyword;
+use super::lexer::KeywordType;
 use super::lexer::NumType;
 
 /// A module, or a crate, as well as a rust source file.
@@ -178,7 +178,7 @@ pub enum Token<'a> {
     /// An outer document.
     OuterDoc(&'a str),
     /// An keyword.
-    Keyword(Keyword),
+    Keyword(KeywordType),
     /// An identifier or `_`.
     Ident(&'a str),
     /// A lifetime.
