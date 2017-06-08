@@ -505,8 +505,9 @@ mod test {
         assert_eq!(lex(r"'\u{99}'"),        Ok(vec![(Literal(r"'\u{99}'"), 0..8)]));
         assert_eq!(lex(r"'\u{000000}'"),    Ok(vec![(Literal(r"'\u{000000}'"), 0..12)]));
 
-        assert!(lex(r"'\u{}'") != Ok(vec![(Literal(r"'\u{}'"), 0..6)]));
-        assert!(lex(r"'\x0'")  != Ok(vec![(Literal(r"'\x0'"), 0..5)]));
+        // should be invalid
+        assert_ne!(lex(r"'\u{}'"),  Ok(vec![(Literal(r"'\u{}'"), 0..6)]));
+        assert_ne!(lex(r"'\x0'"),   Ok(vec![(Literal(r"'\x0'"), 0..5)]));
 
         assert_eq!(lex("'a 'a"),    Ok(vec![(Lifetime("a"), 0..2), (Lifetime("a"), 3..5)]));
         assert_eq!(lex("'_1a"),     Ok(vec![(Lifetime("_1a"), 0..4)]));
@@ -518,7 +519,7 @@ mod test {
         let mut expect = vec![];
         for (k, &symty) in SYMBOLS.iter() {
             expect.push((Symbol(symty), source.len()..source.len() + k.len()));
-            source += &k;
+            source += k;
             source.push(' ');
         }
         println!("testing: `{}`", source);
