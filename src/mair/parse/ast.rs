@@ -1,5 +1,4 @@
 use super::lexer::KeywordType;
-use super::lexer::NumType;
 
 /// A module, or a crate, as well as a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -187,7 +186,7 @@ pub enum Token<'a> {
     /// parsed into a single `Symbol` rather than 2 `>`s, even though it's a part of template.
     Symbol(&'static str),
     /// A literal.
-    Literal(LiteralType),
+    Literal(&'a str),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -200,25 +199,6 @@ pub enum Delimiter {
     Brace,
 }
 
-/// The type of literal. There's not bool because bool literals(`true` and `false`) will be
-/// parsed into a `Token::Keyword` instead of a `Token::Literal`.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum LiteralType {
-    /// A byte literal. eg. `b'a'`
-    Byte,
-    /// A char literal. eg. `'a'`
-    Char,
-    /// A string or raw string literal. eg. `"a"`, `r#"""#`
-    Str,
-    /// A byte string or byte raw string literal. eg. `b"a"`, `br"a"`
-    ByteStr,
-    /// A number literal with type suffix. eg. `0x20usize`, `1e2f64`
-    TypedNum(NumType),
-    /// A integer number literal without type suffix. eg. `0`, `0b11`
-    Integer,
-    /// A float number literal without type suffix. eg. `1e300`, `0.1`
-    Float,
-}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum OperatorType {
