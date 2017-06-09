@@ -120,6 +120,8 @@ pub struct Trait<'a> {
 /// A type.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Ty<'a> {
+    /// The placeholder `_`.
+    Hole,
     /// A generic type applied with type paramaters, like `Vec<i32>`.
     /// No paramaters indicates a normal type, like `i32`.
     Apply(Path<'a>, Vec<Ty<'a>>),
@@ -130,14 +132,9 @@ pub enum Ty<'a> {
     /// Trait object.
     Trait(Trait<'a>),
     /// Reference.
-    Ref{ lifetime: &'a str, inner: Box<Ty<'a>> },
-    /// Mutable reference.
-    RefMut{ lifetime: &'a str, inner: Box<Ty<'a>> },
+    Ref{ is_mut: bool, lifetime: &'a str, inner: Box<Ty<'a>> },
     /// Pointers.
-    Ptr(Box<Ty<'a>>),
-    /// Mutable pointers.
-    PtrMut(Box<Ty<'a>>),
-    // TODO: builtin types
+    Ptr{ is_mut: bool, inner: Box<Ty<'a>> },
 }
 
 /// The type of function.
@@ -145,8 +142,6 @@ pub enum Ty<'a> {
 pub enum FuncTy<'a> {
     /// Diverging function, like `fn() -> !`
     Diverging(Vec<Ty<'a>>),
-    /// Function without writing return type(default `()`), like `fn(i32)`.
-    Action(Vec<Ty<'a>>),
     /// Other normal function, like `fn(i32) -> i32`.
     Normal(Vec<Ty<'a>>, Box<Ty<'a>>),
 }
@@ -157,11 +152,10 @@ pub enum Attr<'a> {
     /// A single attribute name, like `test`, `macro_use`.
     Flag(&'a str),
     /// A key-value pair, like `crate_type = "lib"`, `recursion_limit="64"`.
-    /// TODO: literal parsing.
-    Value(&'a str, ()),
+    Value{ key: &'a str, value: &'a str },
     /// An attribute with a list of sub-attribute arguments,
     /// like `cfg(target_os="linux")`.
-    Sub(Vec<Attr<'a>>),
+    Sub(&'a str, Vec<Attr<'a>>),
 }
 
 pub type FuncBody<'a> = Vec<Token<'a>>;
