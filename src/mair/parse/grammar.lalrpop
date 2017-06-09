@@ -230,6 +230,18 @@ keyword: KeywordType = {
     "yield"     => KwYield,
 };
 
+// Something separated by comma. Tail comma is acceptable.
+tuple_of<T>: Vec<T> = {
+    <v:(<T> ",")*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            let mut v = v;
+            v.push(e);
+            v
+        }
+    }
+};
+
 // Token tree
 pub tts: Vec<Token<'input>> = tt*;
 
@@ -244,4 +256,13 @@ pub tt: Token<'input> = {
     LITERAL         => Token::Literal(<>),
     INNERDOC        => Token::InnerDoc(<>),
     OUTERDOC        => Token::OuterDoc(<>),
+};
+
+// Attributes
+inner_attr: Attr<'input> = "#" "!" "[" <attr_content> "]";
+outer_attr: Attr<'input> = "#" "[" <attr_content> "]";
+attr_content: Attr<'input> = {
+    IDENT                                    => Attr::Flag(<>),
+    <k: IDENT> "=" <v: LITERAL>              => Attr::Value{ key: k, value: v },
+    <IDENT> "(" <tuple_of<attr_content>> ")" => Attr::Sub(<>),
 };
