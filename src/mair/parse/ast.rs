@@ -84,22 +84,22 @@ pub enum ImplItem<'a> {
 }
 
 /// A path, like `::std::Option`, `MyEnum::A`, etc.
-/// Note that type hint of a template function(`::<i32>` part in `func::<i32>`)
-/// is not included.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Path<'a>(PathBegin<'a>, Vec<&'a str>);
+pub enum Path<'a> {
+    /// An absolute path like `::std::i32`.
+    Absolute(Vec<PathComp<'a>>),
+    /// An relative path like `i32` or `super::SomeStruct`.
+    Relative{ supers: usize, tails: Vec<PathComp<'a>> },
+    /// An path which begins with a type in a pair of angle brackets,
+    /// like `<i32>::min_value` or `<::std::option::Option<i32>>::is_none`.
+    Ty{ ty: Box<Ty<'a>>, tails: Vec<PathComp<'a>> },
+}
 
-/// The begining of a path.
+/// A path component, maybe with template hint (if any).
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum PathBegin<'a> {
-    /// Begin with root, like `std`(in `use` declarations), `::std`, etc.
-    ModRoot,
-    /// Begin with self or super, like `func`(in expressions, `supers`: 0),
-    /// `super::func`(`supers`: 1), `super::super::*`(`supers`: 2), etc.
-    ModSelf{ supers: usize },
-    /// Begin with a type, like `<i32>::max_value`, `<Option<_>>::default`,
-    /// etc. Only be valid in expressions.
-    Ty(Box<Ty<'a>>),
+pub struct PathComp<'a> {
+    pub body: &'a str,
+    pub hint: Option<Vec<Ty<'a>>>,
 }
 
 /// Template types and trait bounds.
