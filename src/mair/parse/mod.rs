@@ -2,6 +2,14 @@ pub mod ast;
 pub mod lexer;
 pub mod grammar;
 
+/// Integer type with the maximum width supported.
+#[allow(non_camel_case_types)]
+pub type imax = i64;
+
+/// Floating point type with the maximum width supported.
+#[allow(non_camel_case_types)]
+pub type fmax = f64;
+
 /// Get item offset of b from a, similar to pointer subtraction
 /// `(const T *)a - (const T *)b` in C/C++.
 ///

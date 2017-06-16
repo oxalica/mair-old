@@ -1,4 +1,6 @@
+use std::cmp::Eq;
 use super::lexer::KeywordType;
+use super::{imax, fmax};
 
 /// A module, or a crate, as well as a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -152,7 +154,7 @@ pub enum Attr<'a> {
     /// A single attribute name, like `test`, `macro_use`.
     Flag(&'a str),
     /// A key-value pair, like `crate_type = "lib"`, `recursion_limit="64"`.
-    Value{ key: &'a str, value: &'a str },
+    Value{ key: &'a str, value: Literal<'a> },
     /// An attribute with a list of sub-attribute arguments,
     /// like `cfg(target_os="linux")`.
     Sub(&'a str, Vec<Attr<'a>>),
@@ -180,7 +182,7 @@ pub enum Token<'a> {
     /// parsed into a single `Symbol` rather than 2 `>`s, even though it's a part of template.
     Symbol(&'static str),
     /// A literal.
-    Literal(&'a str),
+    Literal(Literal<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -209,3 +211,18 @@ pub enum OperatorType {
     AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
     AndAssign, OrAssign, XorAssign, ShlAssign, ShrAssign,
 }
+
+/// A literal.
+#[derive(Debug, PartialEq, Clone)]
+pub enum Literal<'a> {
+    /// A char or byte char.
+    CharLike { is_byte: bool, ch: char },
+    /// A string, raw string, byte string or raw byte string.
+    StrLike  { is_bytestr: bool, s: String },
+    /// An interer type. If it has no type suffix, `ty` is None.
+    IntLike  { ty: Option<Ty<'a>>, val: imax },
+    /// An floating point type. If it has no type suffix, `ty` is None.
+    FloatLike{ ty: Option<Ty<'a>>, val: fmax },
+}
+
+impl<'a> Eq for Literal<'a> {} // The float value is never NaN.

@@ -1,5 +1,6 @@
 use super::lexer::*;
 use super::ast::*;
+use super::ast::Literal as Lit;
 use self::KeywordType::*;
 use self::LexToken::*;
 use self::LexSymbol::*;
@@ -15,7 +16,7 @@ extern {
         LIFETIME    => Lifetime(<&'input str>),
         INNERDOC    => InnerDoc(<&'input str>),
         OUTERDOC    => OuterDoc(<&'input str>),
-        LITERAL     => Literal(<&'input str>),
+        LITERAL     => Literal(<Lit<'input>>),
 
         ">_"        => AmbigGt,
 
