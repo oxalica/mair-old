@@ -1,12 +1,14 @@
 use std::ops::Range;
 use std::collections::HashMap;
-use regex::{Regex, escape};
-use super::str_ptr_diff;
+use std::char::from_u32;
+use regex::{Regex, Captures, escape};
+use super::{imax, fmax, str_ptr_diff};
+use super::ast::{Literal as Lit, Ty, Path, PathComp};
 
 pub type Pos = usize;
 pub type Loc = Range<Pos>;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum LexToken<'input> {
     /// An inner document containing the content.
     InnerDoc(&'input str),
@@ -19,7 +21,7 @@ pub enum LexToken<'input> {
     /// A lifetime excluding leading `'`.
     Lifetime(&'input str),
     /// A char, string or number literal.
-    Literal(&'input str),
+    Literal(Lit<'input>),
     /// A symbol.
     Symbol(LexSymbol),
     /// The ambiguous symbol `>` followed by `>` or `=`. eg. `>>` will be parsed into
@@ -34,19 +36,21 @@ pub enum LexicalError<P> {
     UnclosedComment(P),
     UnterminatedString(P),
     InvalidNumberSuffix(P),
+    InvalidEscape(P),
 }
 
-impl<P> LexicalError<P> {
-    fn map<NP, F>(self, f: F) -> LexicalError<NP>
-            where F: FnOnce(P) -> NP {
-        use self::LexicalError::*;
-        match self {
-            UnknowToken(p)          => UnknowToken(f(p)),
-            UnclosedComment(p)      => UnclosedComment(f(p)),
-            UnterminatedString(p)   => UnterminatedString(f(p)),
-            InvalidNumberSuffix(p)  => InvalidNumberSuffix(f(p)),
-        }
-    }
+/// An iterator over escaped `&str` producing unescaped chars
+struct EscapedChars<'a>(&'a str);
+
+/// An iterator over `str` producing `Some(LexToken)` for token or `None` for comment.
+struct Tokenizer<'input> {
+    rest: &'input str,
+}
+
+/// An iterator over `str` whose output is compatible with the lalrpop parser.
+pub struct Lexer<'input> {
+    source: &'input str,
+    tokenizer: Tokenizer<'input>,
 }
 
 macro_rules! define_symbols(
@@ -208,6 +212,32 @@ define_keywords! {
     KwYield     = "yield";
 } // define_keywords!
 
+/// The regex match a char(maybe escaped).
+const RESTR_CHAR: &'static str = r#"(?x:
+    (?P<char_normal>[[:^cntrl:]&&[^\\]])|
+    \\(?:
+        (?P<char_escape_simple>[\\'"nrt0\n])|
+        x(?P<char_escape_ascii>[[:xdigit:]]{2})|
+        u\{(?P<char_escape_unicode>[[:xdigit:]]{1,6})\}
+    )
+)"#;
+
+const RESTR_NUM: &'static str = r#"(?x:
+    (?:
+        0b(?P<num_bin>[01_]+)|
+        0o(?P<num_oct>[0-7_]+)|
+        0x(?P<num_hex>[[:xdigit:]]+)|
+        (?P<num_body>
+            \d[\d_]*
+            (?P<num_float_like>
+                (?:\.\d[\d_]*)?
+                (?:[Ee][+-]?[\d_]+)?
+            )
+        )
+    )
+    (?P<num_suffix>\w*)
+)"#;
+
 lazy_static! {
     static ref RE_MAIN: Regex = Regex::new(&format!(r#"(?xsm)\A(?:
         (?P<line_innerdoc>//!.*?(?:\z|\n))|
@@ -216,34 +246,20 @@ lazy_static! {
         (?P<block_innerdoc_beg>/\*!)|
         (?P<block_outerdoc_beg_eat1>/\*\*[^*/])|
         (?P<block_comment_beg>/\*)|
-        (?P<num>
-            (?:
-                0b[01_]+|
-                0o[0-7_]+|
-                0x[[:xdigit:]]+|
-                (?:
-                    \d[\d_]*
-                    (?:\.\d[\d_]*)?
-                    (?:[Ee][+-]?[\d_]+)?
-                )
-            )
-            (?P<num_suffix>\w*)
+        (?P<num>{num})|
+        (?P<raw_string_beg>(?P<raw_string_byte>b)?r(?P<raw_string_hashes>\#*)")|
+        (?P<string>
+            (?P<string_byte>b)?"
+            (?P<string_content>[^"\\]*(?:\\.[^"\\]*)*)
+            (?P<string_closed>")?
         )|
-        (?P<raw_string_beg>b?r(?P<raw_string_hashes>\#*)")|
-        (?P<string>b?"[^"\\]*(?:\\.[^"\\]*)*(?P<string_closed>")?)|
-        (?P<char>b?'(?:
-            [[:^cntrl:]&&[^\\']]|
-            \\(?:
-                [\\'"nrt0]|
-                x[[:xdigit:]]{{2}}|
-                u\{{[[:xdigit:]]{{1,6}}\}}
-            )
-        )')|
+        (?P<char>(?P<char_byte>b)?'(?P<char_content>{chr})')|
         (?P<lifetime>'[A-Za-z_]\w*)|
         (?P<symbol>{symbols})|
         (?P<keyword>(?:{keywords})\b)|
         (?P<ident>[A-Za-z_]\w*)
-    )"#, symbols=*RESTR_SYMBOLS, keywords=*RESTR_KEYWORDS)).unwrap();
+    )"#, num=RESTR_NUM, chr=RESTR_CHAR, symbols=*RESTR_SYMBOLS, keywords=*RESTR_KEYWORDS
+    )).unwrap();
 
     static ref RE_BLOCK_COMMENT_BEGIN_END: Regex = Regex::new(
         r"(?s).*?(?:(?P<begin>/\*)|\*/)",
@@ -251,15 +267,79 @@ lazy_static! {
 
     static ref RE_NUM_SUFFIX: Regex = Regex::new(
         r"(?x)\A(?:
-            [iu](?:8|16|32|64|size)|
+            (?P<int_like>[iu](?:8|16|32|64|size))|
             f(?:32|64)
         )?\z"
     ).unwrap();
 }
 
-/// An iterator over `str` producing `Some(LexToken)` for token or `None` for comment.
-struct Tokenizer<'input> {
-    rest: &'input str,
+impl<P> LexicalError<P> {
+    fn map<NP, F>(self, f: F) -> LexicalError<NP>
+            where F: FnOnce(P) -> NP {
+        use self::LexicalError::*;
+        match self {
+            UnknowToken(p)          => UnknowToken(f(p)),
+            UnclosedComment(p)      => UnclosedComment(f(p)),
+            UnterminatedString(p)   => UnterminatedString(f(p)),
+            InvalidNumberSuffix(p)  => InvalidNumberSuffix(f(p)),
+            InvalidEscape(p)        => InvalidEscape(f(p)),
+        }
+    }
+}
+
+impl<'a> EscapedChars<'a> {
+    fn new(s: &'a str) -> Self {
+        EscapedChars(s)
+    }
+}
+
+impl<'a> Iterator for EscapedChars<'a> {
+    type Item = Result<char, &'a str>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        lazy_static! {
+            static ref RE_ESCAPED: Regex = Regex::new(
+                &format!(r"\A{}", RESTR_CHAR)
+            ).unwrap();
+        }
+
+        let err = Some(Err(self.0));
+
+        loop {
+            return if self.0.is_empty() {
+                None
+            } else if let Some(cap) = RE_ESCAPED.captures(self.0) {
+                self.0 = &self.0[cap[0].len()..];
+                Some(Ok(if let Some(s) = cap.name("char_normal") {
+                    s.as_str().chars().next().unwrap()
+                } else if let Some(s) = cap.name("char_escape_simple") {
+                    match s.as_str().as_bytes()[0] {
+                        b'n'  => '\n',
+                        b'r'  => '\r',
+                        b't'  => '\t',
+                        b'0'  => '\0',
+                        b'\n' => {
+                            self.0 = self.0.trim_left();
+                            continue
+                        },
+                        c@_ if br#"\\'"nrt0"#.contains(&c) => c as char,
+                        _     => return err,
+                    }
+                } else if let Some(s) = cap.name("char_escape_ascii") {
+                    u8::from_str_radix(s.as_str(), 16).unwrap() as char // checked by regex
+                } else if let Some(s) = cap.name("char_escape_unicode") {
+                    match from_u32(u32::from_str_radix(s.as_str(), 16).unwrap()) { // ..
+                        Some(c) => c,
+                        None    => return err,
+                    }
+                } else {
+                    return err
+                }))
+            } else { // match failed
+                err
+            }
+        }
+    }
 }
 
 impl<'input> Tokenizer<'input> {
@@ -293,15 +373,95 @@ impl<'input> Tokenizer<'input> {
     }
 
     /// Consume raw string inner(without the starting tag) till the ending tag.
-    fn eat_raw_string(&mut self, hashes: usize) -> Result<(), LexicalError<()>> {
+    /// Return the content of the string.
+    fn eat_raw_string(&mut self, hashes: usize) -> Result<&'input str, LexicalError<()>> {
         let pat = format!("\"{}", "#".repeat(hashes));
         if let Some(p) = self.rest.find(&pat) {
+            let content = &self.rest[..p];
             self.advance(p + pat.len());
-            Ok(())
+            Ok(content)
         } else {
             Err(LexicalError::UnterminatedString(()))
         }
     }
+}
+
+/// Parse a char-like literal captured.
+fn parse_cap_char<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalError<()>> {
+    let s = &cap["char_content"];
+    match EscapedChars::new(s).next().unwrap() { // must have at least 1 char
+        Ok(ch) if s.as_bytes()[0] != b'\'' => Ok(Lit::CharLike{ // `'''` is invalid
+            is_byte: cap.name("char_byte").is_some(),
+            ch,
+        }),
+        _ => Err(LexicalError::InvalidEscape(())), // TODO: save the position
+    }
+}
+
+/// Parse a number-like literal captured.
+fn parse_cap_num<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalError<()>> {
+    use self::Lit::*;
+
+    let err = Err(LexicalError::InvalidNumberSuffix(()));
+    let (radix, s) = if let Some(s) = cap.name("num_bin")  { ( 2, s) }
+                else if let Some(s) = cap.name("num_oct")  { ( 8, s) }
+                else if let Some(s) = cap.name("num_hex")  { (16, s) }
+                else if let Some(s) = cap.name("num_body") { (10, s) }
+                else { unreachable!() };
+    let s = s.as_str().replace("_", "");
+    let mut lit = if cap.name("num_float_like").map_or(false, |s| !s.as_str().is_empty()) {
+        FloatLike{ ty: None, val: s.parse().unwrap() } // checked by regex
+    } else {
+        IntLike{ ty: None, val: imax::from_str_radix(&s, radix).unwrap() } // ..
+    };
+    if let Some(cap_suf) = RE_NUM_SUFFIX.captures(cap.name("num_suffix").unwrap().as_str()) {
+        if !cap_suf[0].is_empty() {
+            let ty_suf = Ty::Apply(
+                Path::Relative{
+                    supers: 0,
+                    tails: vec![PathComp{ body: cap_suf.get(0).unwrap().as_str(), hint: None }]
+                },
+                vec![],
+            );
+            if cap_suf.name("int_like").is_some() {
+                match lit {
+                    IntLike{ ref mut ty, .. }   => *ty = Some(ty_suf),
+                    FloatLike{..}               => return err,
+                    _                           => unreachable!(),
+                }
+            } else { // float-like
+                match lit {
+                    IntLike{ val, .. }          => lit = FloatLike {
+                        ty: Some(ty_suf),
+                        val: val as fmax,
+                    },
+                    FloatLike{ ref mut ty, .. } => *ty = Some(ty_suf),
+                    _                           => unreachable!(),
+                }
+            }
+        }
+        Ok(lit)
+    } else { // unmatched suffix
+        err
+    }
+}
+
+/// Parse a string-like literal.
+fn parse_str_string(source: &str, is_bytestr: bool, is_raw: bool)
+        -> Result<Lit, LexicalError<()>> {
+    let mut s;
+    if is_raw {
+        s = String::from(source)
+    } else {
+        s = String::new();
+        for ret in EscapedChars::new(source) {
+            match ret {
+                Ok(c)  => s.push(c),
+                Err(_) => Err(LexicalError::InvalidEscape(()))?, // TODO: save the position
+            }
+        }
+    };
+    Ok(Lit::StrLike{ is_bytestr, s })
 }
 
 impl<'input> Iterator for Tokenizer<'input> {
@@ -327,21 +487,20 @@ impl<'input> Iterator for Tokenizer<'input> {
                     m if is("lifetime")             => Some(Lifetime(&m[1..])),
                     m if is("keyword")              => Some(Keyword(KEYWORDS[m])),
                     m if is("ident")                => Some(Ident(m)),
-                    m if is("char")                 => Some(Literal(m)),
                     _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
-                    m if is("num")                  => {
-                        if RE_NUM_SUFFIX.is_match(&cap["num_suffix"]) {
-                            Some(Literal(m))
-                        } else {
-                            Err(InvalidNumberSuffix(()))?
-                        }
-                    },
-                    m if is("string")               => {
+                    _ if is("char")                 => Some(Literal(parse_cap_char(&cap)?)),
+                    _ if is("num")                  => Some(Literal(parse_cap_num(&cap)?)),
+                    _ if is("string")               => {
                         if !is("string_closed") {
                             Err(UnterminatedString(()))?
                         } else {
-                            Some(Literal(m))
+                            let content = cap.name("string_content").unwrap().as_str();
+                            Some(Literal(parse_str_string(content, is("string_byte"), false)?))
                         }
+                    },
+                    _ if is("raw_string_beg")       => {
+                        let s = self.eat_raw_string(cap["raw_string_hashes"].len())?;
+                        Some(Literal(parse_str_string(s, is("raw_string_byte"), true)?))
                     },
                     _ if is("block_outerdoc_beg_eat1")  => {
                         self.rest = &slast[cap[0].len() - 1..]; // put the eaten first char back
@@ -350,10 +509,6 @@ impl<'input> Iterator for Tokenizer<'input> {
                     _ if is("block_comment_beg")    => {
                         self.eat_block_comment()?;
                         None
-                    },
-                    _ if is("raw_string_beg")       => {
-                        self.eat_raw_string(cap["raw_string_hashes"].len())?;
-                        Some(Literal(&slast[..slast.len() - self.rest.len()])) // including start/end tags
                     },
                     m if is("symbol")               => {
                         let tokty = SYMBOLS[m];
@@ -375,12 +530,6 @@ impl<'input> Iterator for Tokenizer<'input> {
             Some(Err(UnknowToken(self.rest)))
         }
     }
-}
-
-/// An iterator over `str` whose output is compatible with the lalrpop parser.
-pub struct Lexer<'input> {
-    source: &'input str,
-    tokenizer: Tokenizer<'input>,
 }
 
 impl<'input> Lexer<'input> {
@@ -432,6 +581,34 @@ mod test {
         Ok(v)
     }
 
+    fn unesc(input: &str) -> Result<String, &str> {
+        let mut s = String::new();
+        for ret in EscapedChars::new(input) {
+            s.push(ret?);
+        }
+        Ok(s)
+    }
+
+    #[test]
+    fn unescape_chars() {
+        let s = |s| String::from(s);
+
+        assert_eq!(unesc(""),                   Ok(s("")));
+        assert_eq!(unesc("\"x'"),               Ok(s("\"x'")));
+        assert_eq!(unesc("abc呢"),              Ok(s("abc呢")));
+        assert_eq!(unesc("\x7aa"),              Ok(s("\x7Aa")));
+        assert_eq!(unesc(r"\u{1}"),             Ok(s("\x01")));
+        assert_eq!(unesc(r"\u{2764}"),          Ok(s("\u{2764}")));
+        assert_eq!(unesc("\\\n\r a"),           Ok(s("a")));
+        assert_eq!(unesc(r#"\\\'\"\n\r\t\0"#),  Ok(s("\\\'\"\n\r\t\0")));
+
+        assert_eq!(unesc(r"aa\u{}"),            Err(r"\u{}"));
+        assert_eq!(unesc(r"\a"),                Err(r"\a"));
+        assert_eq!(unesc(r"\x0"),               Err(r"\x0"));
+        assert_eq!(unesc(r"\x0*"),              Err(r"\x0*"));
+        assert_eq!(unesc(r"\u{999999}"),        Err(r"\u{999999}"));
+    }
+
     #[test]
     fn lexer_keyword_ident() {
         assert_eq!(lex("_"),        Ok(vec![(Ident("_"), 0..1)]));
@@ -476,38 +653,45 @@ mod test {
 
     #[test]
     fn lexer_literal_lifetime() {
-        assert_eq!(lex("1"),            Ok(vec![(Literal("1"), 0..1)]));
-        assert_eq!(lex("1isize"),       Ok(vec![(Literal("1isize"), 0..6)]));
-        assert_eq!(lex("1__3_.2_8_"),   Ok(vec![(Literal("1__3_.2_8_"), 0..10)]));
-        assert_eq!(lex("1.2e3f32"),     Ok(vec![(Literal("1.2e3f32"), 0..8)]));
-        assert_eq!(lex("1.2e-3"),       Ok(vec![(Literal("1.2e-3"), 0..6)]));
-        assert_eq!(lex("1e+3"),         Ok(vec![(Literal("1e+3"), 0..4)]));
-        assert_eq!(lex("0xDeAdBeEf"),   Ok(vec![(Literal("0xDeAdBeEf"), 0..10)]));
-        assert_eq!(lex("0o__1_07i8"),   Ok(vec![(Literal("0o__1_07i8"), 0..10)]));
-        assert_eq!(lex("0b__1_01"),     Ok(vec![(Literal("0b__1_01"), 0..8)]));
+        let compi32 = PathComp{ body: "i32", hint: None };
+        let compf64 = PathComp{ body: "f64", hint: None };
+        let styi32 = Some(Ty::Apply(Path::Relative{ supers: 0, tails: vec![compi32] }, vec![]));
+        let styf64 = Some(Ty::Apply(Path::Relative{ supers: 0, tails: vec![compf64] }, vec![]));
+
+        assert_eq!(lex("1"),            Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 1 }), 0..1)]));
+        assert_eq!(lex("1i32"),         Ok(vec![(Literal(Lit::IntLike{ ty: styi32.clone(), val: 1 }), 0..4)]));
+        assert_eq!(lex("1__3_.2_8_"),   Ok(vec![(Literal(Lit::FloatLike{ ty: None, val: 13.28 }), 0..10)]));
+        assert_eq!(lex("1.2e3f64"),     Ok(vec![(Literal(Lit::FloatLike{ ty: styf64.clone(), val: 1.2e3 }), 0..8)]));
+        assert_eq!(lex("1.2e-3"),       Ok(vec![(Literal(Lit::FloatLike{ ty: None, val: 1.2e-3 }), 0..6)]));
+        assert_eq!(lex("1e+3"),         Ok(vec![(Literal(Lit::FloatLike{ ty: None, val: 1e3 }), 0..4)]));
+        assert_eq!(lex("0xDeAdBeEf64"), Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 0xDEADBEEF64 }), 0..12)]));
+        assert_eq!(lex("0o__1_07f64"),  Ok(vec![(Literal(Lit::FloatLike{ ty: styf64.clone(), val: 0o107i32 as f64 }), 0..11)])); // TODO
+        assert_eq!(lex("0b__1_01"),     Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 0b101 }), 0..8)]));
 
         assert_eq!(lex("0b21"),         Err(InvalidNumberSuffix(0))); // suffix match `b21` and fails
         assert_eq!(lex("0b_1_2"),       Err(InvalidNumberSuffix(0))); // suffix match `2` and fails
 
-        assert_eq!(lex(r#" "\"" "#),        Ok(vec![(Literal(r#""\"""#), 1..5)]));
-        assert_eq!(lex(r#" b" \" \" " "#),  Ok(vec![(Literal(r#"b" \" \" ""#), 1..11)]));
-        assert_eq!(lex(r#" r"\" "#),        Ok(vec![(Literal(r#"r"\""#), 1..5)]));
-        assert_eq!(lex(r##" r#"\"# "##),    Ok(vec![(Literal("r#\"\\\"#"), 1..7)]));
+        let lstr = |is_bytestr, s| Literal(Lit::StrLike{ is_bytestr, s: String::from(s) });
+        assert_eq!(lex(r#" "\"" "#),        Ok(vec![(lstr(false, "\""), 1..5)]));
+        assert_eq!(lex(r#" b" \" \" " "#),  Ok(vec![(lstr(true, " \" \" "), 1..11)]));
+        assert_eq!(lex(r#" r"\" "#),        Ok(vec![(lstr(false, "\\"), 1..5)]));
+        assert_eq!(lex(r##" r#"\"# "##),    Ok(vec![(lstr(false, "\\"), 1..7)]));
 
         assert_eq!(lex(r#" "\" "#),         Err(UnterminatedString(1)));
         assert_eq!(lex(r#" br#"" "#),       Err(UnterminatedString(1)));
 
-        assert_eq!(lex("'a'a"),             Ok(vec![(Literal("'a'"), 0..3), (Ident("a"), 3..4)]));
-        assert_eq!(lex("'劲'"),             Ok(vec![(Literal("'劲'"), 0..2+"劲".len())]));
-        assert_eq!(lex(r"b'\x00'"),         Ok(vec![(Literal(r"b'\x00'"), 0..7)]));
-        assert_eq!(lex(r"'\''"),            Ok(vec![(Literal(r"'\''"), 0..4)]));
-        assert_eq!(lex(r"'\\'"),            Ok(vec![(Literal(r"'\\'"), 0..4)]));
-        assert_eq!(lex(r"'\u{99}'"),        Ok(vec![(Literal(r"'\u{99}'"), 0..8)]));
-        assert_eq!(lex(r"'\u{000000}'"),    Ok(vec![(Literal(r"'\u{000000}'"), 0..12)]));
+        let chr = |is_byte, ch| Literal(Lit::CharLike{ is_byte, ch });
+        assert_eq!(lex("'a'a"),             Ok(vec![(chr(false, 'a'), 0..3), (Ident("a"), 3..4)]));
+        assert_eq!(lex("'劲'"),             Ok(vec![(chr(false, '劲'), 0..2+"劲".len())]));
+        assert_eq!(lex(r"b'\x00'"),         Ok(vec![(chr(true, '\0'), 0..7)]));
+        assert_eq!(lex(r"'\''"),            Ok(vec![(chr(false, '\''), 0..4)]));
+        assert_eq!(lex(r"'\\'"),            Ok(vec![(chr(false, '\\'), 0..4)]));
+        assert_eq!(lex(r"'\u{99}'"),        Ok(vec![(chr(false, '\u{99}'), 0..8)]));
+        assert_eq!(lex(r"'\u{000000}'"),    Ok(vec![(chr(false, '\0'), 0..12)]));
 
         // should be invalid
-        assert_ne!(lex(r"'\u{}'"),  Ok(vec![(Literal(r"'\u{}'"), 0..6)]));
-        assert_ne!(lex(r"'\x0'"),   Ok(vec![(Literal(r"'\x0'"), 0..5)]));
+        assert_eq!(lex(r#""\u{}""#), Err(InvalidEscape(0)));
+        assert!(lex(r"'\x0'").is_err());
 
         assert_eq!(lex("'a 'a"),    Ok(vec![(Lifetime("a"), 0..2), (Lifetime("a"), 3..5)]));
         assert_eq!(lex("'_1a"),     Ok(vec![(Lifetime("_1a"), 0..4)]));
@@ -535,6 +719,8 @@ mod test {
         use std::io::Read;
         let mut source = String::new();
         File::open(file!()).unwrap().read_to_string(&mut source).unwrap();
-        assert!(lex(&source).is_ok());
+        let ret = lex(&source);
+        println!("{:?}", ret);
+        assert!(ret.is_ok());
     }
 }
