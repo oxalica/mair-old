@@ -31,12 +31,18 @@ pub enum LexToken<'input> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum LexicalError<P> {
-    UnknowToken(P),
-    UnclosedComment(P),
-    UnterminatedString(P),
-    InvalidNumberSuffix(P),
-    InvalidEscape(P),
+pub struct LexicalError<P> {
+    pub pos:  P,
+    pub kind: LexicalErrorKind,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum LexicalErrorKind {
+    UnknowToken,
+    UnclosedComment,
+    UnterminatedString,
+    InvalidNumberSuffix,
+    InvalidEscape,
 }
 
 /// An iterator over escaped `&str` producing unescaped chars
@@ -273,20 +279,6 @@ lazy_static! {
     ).unwrap();
 }
 
-impl<P> LexicalError<P> {
-    fn map<NP, F>(self, f: F) -> LexicalError<NP>
-            where F: FnOnce(P) -> NP {
-        use self::LexicalError::*;
-        match self {
-            UnknowToken(p)          => UnknowToken(f(p)),
-            UnclosedComment(p)      => UnclosedComment(f(p)),
-            UnterminatedString(p)   => UnterminatedString(f(p)),
-            InvalidNumberSuffix(p)  => InvalidNumberSuffix(f(p)),
-            InvalidEscape(p)        => InvalidEscape(f(p)),
-        }
-    }
-}
-
 impl<'a> EscapedChars<'a> {
     fn new(s: &'a str) -> Self {
         EscapedChars(s)
@@ -354,7 +346,7 @@ impl<'input> Tokenizer<'input> {
 
     /// Consume block comment inner(without the starting tag) till the ending tag.
     /// Return the comment content.
-    fn eat_block_comment(&mut self) -> Result<&'input str, LexicalError<()>> {
+    fn eat_block_comment(&mut self) -> Result<&'input str, LexicalErrorKind> {
         let sbegin = self.rest;
         let mut layer = 1;
         while layer > 0 {
@@ -366,7 +358,7 @@ impl<'input> Tokenizer<'input> {
                     layer -= 1;
                 }
             } else {
-                return Err(LexicalError::UnclosedComment(()));
+                return Err(LexicalErrorKind::UnclosedComment);
             }
         }
         Ok(&sbegin[..sbegin.len() - self.rest.len() - 2]) // excluding `*/`
@@ -374,35 +366,35 @@ impl<'input> Tokenizer<'input> {
 
     /// Consume raw string inner(without the starting tag) till the ending tag.
     /// Return the content of the string.
-    fn eat_raw_string(&mut self, hashes: usize) -> Result<&'input str, LexicalError<()>> {
+    fn eat_raw_string(&mut self, hashes: usize) -> Result<&'input str, LexicalErrorKind> {
         let pat = format!("\"{}", "#".repeat(hashes));
         if let Some(p) = self.rest.find(&pat) {
             let content = &self.rest[..p];
             self.advance(p + pat.len());
             Ok(content)
         } else {
-            Err(LexicalError::UnterminatedString(()))
+            Err(LexicalErrorKind::UnterminatedString)
         }
     }
 }
 
 /// Parse a char-like literal captured.
-fn parse_cap_char<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalError<()>> {
+fn parse_cap_char<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalErrorKind> {
     let s = &cap["char_content"];
     match EscapedChars::new(s).next().unwrap() { // must have at least 1 char
         Ok(ch) if s.as_bytes()[0] != b'\'' => Ok(Lit::CharLike{ // `'''` is invalid
             is_byte: cap.name("char_byte").is_some(),
             ch,
         }),
-        _ => Err(LexicalError::InvalidEscape(())), // TODO: save the position
+        _ => Err(LexicalErrorKind::InvalidEscape), // TODO: save the position
     }
 }
 
 /// Parse a number-like literal captured.
-fn parse_cap_num<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalError<()>> {
+fn parse_cap_num<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalErrorKind> {
     use self::Lit::*;
 
-    let err = Err(LexicalError::InvalidNumberSuffix(()));
+    let err = Err(LexicalErrorKind::InvalidNumberSuffix);
     let (radix, s) = if let Some(s) = cap.name("num_bin")  { ( 2, s) }
                 else if let Some(s) = cap.name("num_oct")  { ( 8, s) }
                 else if let Some(s) = cap.name("num_hex")  { (16, s) }
@@ -448,7 +440,7 @@ fn parse_cap_num<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalError<()>> {
 
 /// Parse a string-like literal.
 fn parse_str_string(source: &str, is_bytestr: bool, is_raw: bool)
-        -> Result<Lit, LexicalError<()>> {
+        -> Result<Lit, LexicalErrorKind> {
     let mut s;
     if is_raw {
         s = String::from(source)
@@ -457,7 +449,7 @@ fn parse_str_string(source: &str, is_bytestr: bool, is_raw: bool)
         for ret in EscapedChars::new(source) {
             match ret {
                 Ok(c)  => s.push(c),
-                Err(_) => Err(LexicalError::InvalidEscape(()))?, // TODO: save the position
+                Err(_) => Err(LexicalErrorKind::InvalidEscape)?, // TODO: save the position
             }
         }
     };
@@ -469,7 +461,7 @@ impl<'input> Iterator for Tokenizer<'input> {
 
     fn next(&mut self) -> Option<Self::Item> {
         use self::LexToken::*;
-        use self::LexicalError::*;
+        use self::LexicalErrorKind::*;
 
         let slast = self.rest.trim_left();
         self.rest = slast;
@@ -478,7 +470,7 @@ impl<'input> Iterator for Tokenizer<'input> {
         } else if let Some(cap) = RE_MAIN.captures(self.rest) {
             self.advance(cap[0].len());
             let is = |name| cap.name(name).is_some();
-            let mut f = || -> Result<_, LexicalError<()>> {
+            let mut f = || -> Result<_, LexicalErrorKind> {
                 // wrap for the carriers inside
                 Ok(match cap.get(0).unwrap().as_str() {
                     m if is("line_innerdoc")        => Some(InnerDoc(&m[3..])),
@@ -492,7 +484,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     _ if is("num")                  => Some(Literal(parse_cap_num(&cap)?)),
                     _ if is("string")               => {
                         if !is("string_closed") {
-                            Err(UnterminatedString(()))?
+                            Err(UnterminatedString)?
                         } else {
                             let content = cap.name("string_content").unwrap().as_str();
                             Some(Literal(parse_str_string(content, is("string_byte"), false)?))
@@ -524,10 +516,10 @@ impl<'input> Iterator for Tokenizer<'input> {
             match f() {
                 Ok(None)        => Some(Ok(None)),
                 Ok(Some(tokty)) => Some(Ok(Some((tokty, &slast[..slast.len() - self.rest.len()])))),
-                Err(e)          => Some(Err(e.map(|()| slast))),
+                Err(e)          => Some(Err(LexicalError{ pos: slast, kind: e })),
             }
         } else { // regex match fails
-            Some(Err(UnknowToken(self.rest)))
+            Some(Err(LexicalError{ pos: self.rest, kind: UnknowToken}))
         }
     }
 }
@@ -552,13 +544,14 @@ impl<'input> Iterator for Lexer<'input> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             return match self.tokenizer.next() {
-                None                       => None,
-                Some(Err(e))               => Some(Err(e.map(|s| self.pos(s).0))),
-                Some(Ok(None))             => continue, // skip comment as space
-                Some(Ok(Some((tokty, s)))) => {
+                None                                 => None,
+                Some(Ok(None))                       => continue, // skip comment as space
+                Some(Ok(Some((tokty, s))))           => {
                     let (beg, end) = self.pos(s);
                     Some(Ok((beg, tokty, end)))
-                }
+                },
+                Some(Err(LexicalError{ pos, kind })) =>
+                    Some(Err(LexicalError{ pos: self.pos(pos).0, kind })),
             }
         }
     }
@@ -570,7 +563,7 @@ mod test {
     use super::LexToken::*;
     use super::KeywordType::*;
     use super::LexSymbol::*;
-    use super::LexicalError::*;
+    use super::LexicalErrorKind::*;
 
     fn lex(input: &str) -> Result<Vec<(LexToken, Loc)>, LexicalError<usize>> {
         let mut v = vec![];
@@ -632,10 +625,10 @@ mod test {
         assert_eq!(lex("a/*/*/*/*/**/*/*/*/*/a"),       Ok(vec![(Ident("a"), 0..1), (Ident("a"), 21..22)]));
         assert_eq!(lex(r#"a/*0/**/"/*'/*/ */*/#*/ a"#), Ok(vec![(Ident("a"), 0..1), (Ident("a"), 24..25)]));
 
-        assert_eq!(lex(" /*"),                              Err(UnclosedComment(1)));
-        assert_eq!(lex("/*/**/*//**"),                      Err(UnclosedComment(8)));
-        assert_eq!(lex("/*/*! */"),                         Err(UnclosedComment(0)));
-        assert_eq!(lex(r#"a/*0/**/"/*'/*//*/+*/#*/ a"#),    Err(UnclosedComment(1)));
+        assert_eq!(lex(" /*"),                              Err(LexicalError{ pos: 1, kind: UnclosedComment }));
+        assert_eq!(lex("/*/**/*//**"),                      Err(LexicalError{ pos: 8, kind: UnclosedComment }));
+        assert_eq!(lex("/*/*! */"),                         Err(LexicalError{ pos: 0, kind: UnclosedComment }));
+        assert_eq!(lex(r#"a/*0/**/"/*'/*//*/+*/#*/ a"#),    Err(LexicalError{ pos: 1, kind: UnclosedComment }));
 
         assert_eq!(lex("////"),     Ok(vec![]));
         assert_eq!(lex("//// a"),   Ok(vec![]));
@@ -668,8 +661,8 @@ mod test {
         assert_eq!(lex("0o__1_07f64"),  Ok(vec![(Literal(Lit::FloatLike{ ty: styf64.clone(), val: 0o107i32 as f64 }), 0..11)])); // TODO
         assert_eq!(lex("0b__1_01"),     Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 0b101 }), 0..8)]));
 
-        assert_eq!(lex("0b21"),         Err(InvalidNumberSuffix(0))); // suffix match `b21` and fails
-        assert_eq!(lex("0b_1_2"),       Err(InvalidNumberSuffix(0))); // suffix match `2` and fails
+        assert_eq!(lex("0b21"),         Err(LexicalError{ pos: 0, kind: InvalidNumberSuffix })); // suffix match `b21` and fails
+        assert_eq!(lex("0b_1_2"),       Err(LexicalError{ pos: 0, kind: InvalidNumberSuffix })); // suffix match `2` and fails
 
         let lstr = |is_bytestr, s| Literal(Lit::StrLike{ is_bytestr, s: String::from(s) });
         assert_eq!(lex(r#" "\"" "#),        Ok(vec![(lstr(false, "\""), 1..5)]));
@@ -677,8 +670,8 @@ mod test {
         assert_eq!(lex(r#" r"\" "#),        Ok(vec![(lstr(false, "\\"), 1..5)]));
         assert_eq!(lex(r##" r#"\"# "##),    Ok(vec![(lstr(false, "\\"), 1..7)]));
 
-        assert_eq!(lex(r#" "\" "#),         Err(UnterminatedString(1)));
-        assert_eq!(lex(r#" br#"" "#),       Err(UnterminatedString(1)));
+        assert_eq!(lex(r#" "\" "#),         Err(LexicalError{ pos: 1, kind: UnterminatedString }));
+        assert_eq!(lex(r#" br#"" "#),       Err(LexicalError{ pos: 1, kind: UnterminatedString }));
 
         let chr = |is_byte, ch| Literal(Lit::CharLike{ is_byte, ch });
         assert_eq!(lex("'a'a"),             Ok(vec![(chr(false, 'a'), 0..3), (Ident("a"), 3..4)]));
@@ -690,7 +683,7 @@ mod test {
         assert_eq!(lex(r"'\u{000000}'"),    Ok(vec![(chr(false, '\0'), 0..12)]));
 
         // should be invalid
-        assert_eq!(lex(r#""\u{}""#), Err(InvalidEscape(0)));
+        assert_eq!(lex(r#""\u{}""#), Err(LexicalError{ pos: 0, kind: InvalidEscape }));
         assert!(lex(r"'\x0'").is_err());
 
         assert_eq!(lex("'a 'a"),    Ok(vec![(Lifetime("a"), 0..2), (Lifetime("a"), 3..5)]));
