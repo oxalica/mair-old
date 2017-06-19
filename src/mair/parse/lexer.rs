@@ -417,9 +417,9 @@ fn parse_cap_num<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalError<()>> {
     if let Some(cap_suf) = RE_NUM_SUFFIX.captures(cap.name("num_suffix").unwrap().as_str()) {
         if !cap_suf[0].is_empty() {
             let ty_suf = Ty::Apply(
-                Path::Relative{
-                    supers: 0,
-                    tails: vec![PathComp{ body: cap_suf.get(0).unwrap().as_str(), hint: None }]
+                Path{
+                    is_absolute: false,
+                    comps: vec![PathComp{ body: cap_suf.get(0).unwrap().as_str(), hint: None }]
                 },
                 vec![],
             );
@@ -655,8 +655,8 @@ mod test {
     fn lexer_literal_lifetime() {
         let compi32 = PathComp{ body: "i32", hint: None };
         let compf64 = PathComp{ body: "f64", hint: None };
-        let styi32 = Some(Ty::Apply(Path::Relative{ supers: 0, tails: vec![compi32] }, vec![]));
-        let styf64 = Some(Ty::Apply(Path::Relative{ supers: 0, tails: vec![compf64] }, vec![]));
+        let styi32 = Some(Ty::Apply(Path{ is_absolute: false, comps: vec![compi32] }, vec![]));
+        let styf64 = Some(Ty::Apply(Path{ is_absolute: false, comps: vec![compf64] }, vec![]));
 
         assert_eq!(lex("1"),            Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 1 }), 0..1)]));
         assert_eq!(lex("1i32"),         Ok(vec![(Literal(Lit::IntLike{ ty: styi32.clone(), val: 1 }), 0..4)]));

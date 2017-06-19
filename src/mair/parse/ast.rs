@@ -4,97 +4,101 @@ use super::{imax, fmax};
 
 /// A module, or a crate, as well as a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Mod<'a> {
-    pub attrs:        Vec<Attr<'a>>,
-    pub extern_crate: Vec<&'a str>,
-    pub items:        Vec<Item<'a>>,
+pub struct ModInner<'a> {
+    pub attrs:  Vec<Attr<'a>>,
+    pub items:  Vec<Item<'a>>,
 }
 
 /// An Item, which is the component of a crate/module.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Item<'a> {
-    pub attrs:  Vec<Attr<'a>>,
     pub is_pub: bool,
-    pub detail: ItemDetail<'a>,
+    pub attrs:  Vec<Attr<'a>>,
+    pub detail: ItemKind<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ItemDetail<'a> {
-    Mod   (Box<Mod<'a>>),
-    Use   (UseDetail<'a>),
-    Func  (Template<'a>, FuncTy<'a>),
-    Type  (Template<'a>, &'a str, Ty<'a>),
-    Struct(Template<'a>, &'a str, StructDetail<'a>),
-    Enum  (Template<'a>, &'a str, Vec<ElemField<'a>>),
-    Const (&'a str, Ty<'a>, Expr<'a>),
-    Static(&'a str, Ty<'a>, Expr<'a>),
-    Trait (Template<'a>, &'a str, Vec<TraitItem<'a>>),
-    Impl  (Template<'a>, &'a str, Option<Ty<'a>>, Vec<ImplItem<'a>>),
+pub enum ItemKind<'a> {
+    ExternCrate (&'a str),
+    Mod         (Vec<Item<'a>>),
+    UseAll      (Path<'a>),
+    UseSome     { path: Path<'a>, names: Vec<UseName<'a>> },
+    Func        { name: &'a str,  templ: Template<'a>, ty: FuncTy<'a> },
+    Type        { alias: &'a str, templ: Template<'a>, origin: Ty<'a> },
+    StructUnit  { name: &'a str,  templ: Template<'a> },
+    StructTuple { name: &'a str,  templ: Template<'a>, elems: Vec<StructTupleElem<'a>> },
+    StructNormal{ name: &'a str,  templ: Template<'a>, fields: Vec<StructField<'a>> },
+    Enum        { name: &'a str,  templ: Template<'a>, vars: Vec<ElemVar<'a>> },
+    Const       { name: &'a str, ty: Ty<'a>, val: Expr<'a> },
+    Static      { name: &'a str, ty: Ty<'a>, val: Expr<'a> },
+    Trait       { name: &'a str, templ: Template<'a>, items: Vec<TraitItem<'a>> },
+    ImplType    { templ: Template<'a>, ty_for: Ty<'a>, items: Vec<ImplItem<'a>> },
+    ImplTrait   { templ: Template<'a>, tr_name: TraitName<'a>, ty_for: Ty<'a>, items: Vec<ImplItem<'a>> },
 }
 
 /// The item or variable referred in a `use` declaration.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum UseDetail<'a> {
-    /// Bind everything under a path, like `std::str::*`.
-    UseAll(Path<'a>),
-    /// Bind one item or variable as new name, like `std::Option as Maybe`.
-    UseAs (Path<'a>, &'a str),
+pub struct UseName<'a> {
+    pub name:  &'a str,
+    pub alias: Option<&'a str>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ElemField<'a> {
-    Tuple (Vec<Attr<'a>>, &'a str, Vec<Ty<'a>>),
-    Struct(Vec<Attr<'a>>, &'a str, Vec<(Vec<Attr<'a>>, Ty<'a>)>),
-}
-
-/// Struct content.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum StructDetail<'a> {
-    /// Unit struct, like `struct T;`.
-    Unit,
-    /// Tuple struct, like `struct T(i32, i32);`.
-    Tuple (Vec<StructTupleElem<'a>>),
-    /// Normal struct with fields, like `struct T{ a: i32, };`.
-    Fields(Vec<StructField<'a>>),
-}
-
+/// An element of a tuple-like struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StructTupleElem<'a> {
-    pub attrs:  Vec<Attr<'a>>,
     pub is_pub: bool,
+    pub attrs:  Vec<Attr<'a>>,
     pub ty:     Ty<'a>,
 }
 
+/// a field of a normal struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StructField<'a> {
-    pub attrs:  Vec<Attr<'a>>,
-    pub is_pub: bool,
     pub name:   &'a str,
+    pub is_pub: bool,
+    pub attrs:  Vec<Attr<'a>>,
     pub ty:     Ty<'a>,
 }
 
+/// An variant of an `enum`.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum TraitItem<'a> {
-    Type(Vec<Attr<'a>>, &'a str, Ty<'a>),
-    Func(Vec<Attr<'a>>, Template<'a>, FuncTy<'a>, Option<FuncBody<'a>>),
+pub enum ElemVar<'a> {
+    Unit  { name: &'a str, attrs: Vec<Attr<'a>> },
+    Tuple { name: &'a str, attrs: Vec<Attr<'a>>, elems: Vec<StructTupleElem<'a>> },
+    Struct{ name: &'a str, attrs: Vec<Attr<'a>>, fields: Vec<StructField<'a>> },
 }
 
+/// An item inside `trait`.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TraitItem<'a> {
+    Type{ name: &'a str, attrs: Vec<Attr<'a>>, default: Option<Ty<'a>> },
+    Func{
+        name: &'a str,
+        attrs: Vec<Attr<'a>>,
+        templ: Template<'a>,
+        ty: FuncTy<'a>,
+        default: Option<FuncBody<'a>>,
+    },
+}
+
+/// An item inside `impl`.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ImplItem<'a> {
-    Type(Vec<Attr<'a>>, &'a str, Ty<'a>),
-    Func(Vec<Attr<'a>>, Template<'a>, FuncTy<'a>, FuncBody<'a>),
+    Type{ name: &'a str, attrs: Vec<Attr<'a>>, val: Ty<'a> },
+    Func{
+        name: &'a str,
+        attrs: Vec<Attr<'a>>,
+        templ: Template<'a>,
+        ty: FuncTy<'a>,
+        body: FuncBody<'a>,
+    },
 }
 
 /// A path, like `::std::Option`, `MyEnum::A`, etc.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Path<'a> {
-    /// An absolute path like `::std::i32`.
-    Absolute(Vec<PathComp<'a>>),
-    /// An relative path like `i32` or `super::SomeStruct`.
-    Relative{ supers: usize, tails: Vec<PathComp<'a>> },
-    /// An path which begins with a type in a pair of angle brackets,
-    /// like `<i32>::min_value` or `<::std::option::Option<i32>>::is_none`.
-    Ty{ ty: Box<Ty<'a>>, tails: Vec<PathComp<'a>> },
+pub struct Path<'a> {
+    pub is_absolute: bool,
+    pub comps:       Vec<PathComp<'a>>,
 }
 
 /// A path component, maybe with template hint (if any).
@@ -109,11 +113,12 @@ pub struct PathComp<'a> {
 pub struct Template<'a> {
     pub lifetimes:    Vec<&'a str>,
     pub tys:          Vec<&'a str>,
-    pub trait_bounds: Vec<(Ty<'a>, Trait<'a>)>,
+    pub trait_bounds: Vec<(Ty<'a>, TraitName<'a>)>,
 }
 
+/// The name to refer a specific trait.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Trait<'a> {
+pub struct TraitName<'a> {
     pub name:      &'a str,
     pub lifetimes: Vec<&'a str>,
     pub params:    Vec<Ty<'a>>,
@@ -132,7 +137,7 @@ pub enum Ty<'a> {
     /// A function pointer, like `fn(i32, u8) -> usize`.
     Func(FuncTy<'a>),
     /// Trait object.
-    Trait(Trait<'a>),
+    Trait(TraitName<'a>),
     /// Reference.
     Ref{ is_mut: bool, lifetime: &'a str, inner: Box<Ty<'a>> },
     /// Pointers.
@@ -143,9 +148,9 @@ pub enum Ty<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum FuncTy<'a> {
     /// Diverging function, like `fn() -> !`
-    Diverging(Vec<Ty<'a>>),
+    Diverging{ args: Vec<Ty<'a>> },
     /// Other normal function, like `fn(i32) -> i32`.
-    Normal(Vec<Ty<'a>>, Box<Ty<'a>>),
+    Normal{ args: Vec<Ty<'a>>, ret: Box<Ty<'a>> },
 }
 
 /// An attribute.
