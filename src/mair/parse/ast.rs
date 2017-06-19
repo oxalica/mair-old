@@ -19,16 +19,18 @@ pub struct Item<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ItemKind<'a> {
+    // https://doc.rust-lang.org/reference/items.html#items
     ExternCrate (&'a str),
-    Mod         (Vec<Item<'a>>),
     UseAll      (Path<'a>),
     UseSome     { path: Path<'a>, names: Vec<UseName<'a>> },
-    Func        { name: &'a str,  templ: Template<'a>, ty: FuncTy<'a> },
+    Mod         { name: &'a str, items: Option<Vec<Item<'a>>> },
+    Func        { name: &'a str, templ: Template<'a>, args: Vec<&'a str>, ty: FuncTy<'a> },
+    Extern      { abi: Option<&'a str>, decls: Vec<ExternFuncDecl<'a>> },
     Type        { alias: &'a str, templ: Template<'a>, origin: Ty<'a> },
-    StructUnit  { name: &'a str,  templ: Template<'a> },
-    StructTuple { name: &'a str,  templ: Template<'a>, elems: Vec<StructTupleElem<'a>> },
-    StructNormal{ name: &'a str,  templ: Template<'a>, fields: Vec<StructField<'a>> },
-    Enum        { name: &'a str,  templ: Template<'a>, vars: Vec<ElemVar<'a>> },
+    StructUnit  { name: &'a str, templ: Template<'a> },
+    StructTuple { name: &'a str, templ: Template<'a>, elems: Vec<StructTupleElem<'a>> },
+    StructNormal{ name: &'a str, templ: Template<'a>, fields: Vec<StructField<'a>> },
+    Enum        { name: &'a str, templ: Template<'a>, vars: Vec<ElemVar<'a>> },
     Const       { name: &'a str, ty: Ty<'a>, val: Expr<'a> },
     Static      { name: &'a str, ty: Ty<'a>, val: Expr<'a> },
     Trait       { name: &'a str, templ: Template<'a>, items: Vec<TraitItem<'a>> },
@@ -41,6 +43,16 @@ pub enum ItemKind<'a> {
 pub struct UseName<'a> {
     pub name:  &'a str,
     pub alias: Option<&'a str>,
+}
+
+/// A function declare used in `extern` block.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ExternFuncDecl<'a> {
+    pub name:   &'a str,
+    pub is_pub: bool,
+    pub attrs:  Vec<Attr<'a>>,
+    pub args:   Vec<&'a str>,
+    pub ty:     FuncTy<'a>, // TODO: variadic function
 }
 
 /// An element of a tuple-like struct or enum variant.
@@ -129,6 +141,8 @@ pub struct TraitName<'a> {
 pub enum Ty<'a> {
     /// The placeholder `_`.
     Hole,
+    /// The type `!`.
+    Diverging,
     /// A generic type applied with type paramaters, like `Vec<i32>`.
     /// No paramaters indicates a normal type, like `i32`.
     Apply(Path<'a>, Vec<Ty<'a>>),
@@ -136,21 +150,17 @@ pub enum Ty<'a> {
     Tuple(Vec<Ty<'a>>),
     /// A function pointer, like `fn(i32, u8) -> usize`.
     Func(FuncTy<'a>),
-    /// Trait object.
-    Trait(TraitName<'a>),
     /// Reference.
-    Ref{ is_mut: bool, lifetime: &'a str, inner: Box<Ty<'a>> },
+    Ref{ is_mut: bool, lifetime: Option<&'a str>, inner: Box<Ty<'a>> },
     /// Pointers.
     Ptr{ is_mut: bool, inner: Box<Ty<'a>> },
 }
 
 /// The type of function.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum FuncTy<'a> {
-    /// Diverging function, like `fn() -> !`
-    Diverging{ args: Vec<Ty<'a>> },
-    /// Other normal function, like `fn(i32) -> i32`.
-    Normal{ args: Vec<Ty<'a>>, ret: Box<Ty<'a>> },
+pub struct FuncTy<'a> {
+    pub args: Vec<Ty<'a>>,
+    pub ret:  Box<Ty<'a>>,
 }
 
 /// An attribute.
