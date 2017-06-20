@@ -36,6 +36,9 @@ pub enum ItemKind<'a> {
     Trait       { name: &'a str, templ: Template<'a>, items: Vec<TraitItem<'a>> },
     ImplType    { templ: Template<'a>, ty_for: Ty<'a>, items: Vec<ImplItem<'a>> },
     ImplTrait   { templ: Template<'a>, tr_name: TraitName<'a>, ty_for: Ty<'a>, items: Vec<ImplItem<'a>> },
+
+    MacroDef    { name: &'a str, tts: Vec<Token<'a>> },
+    PluginInvoke{ name: &'a str, tts: Vec<Token<'a>> },
 }
 
 /// The item or variable referred in a `use` declaration.

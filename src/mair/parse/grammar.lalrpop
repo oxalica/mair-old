@@ -15,13 +15,14 @@ extern {
     type Error = LexicalError<usize>;
 
     enum LexToken<'input> {
-        IDENT       => Ident(<&'input str>),
+        LEXIDENT    => Ident(<&'input str>),
         LIFETIME    => Lifetime(<&'input str>),
         INNERDOC    => InnerDoc(<&'input str>),
         OUTERDOC    => OuterDoc(<&'input str>),
         LITERAL     => Literal(<Lit<'input>>),
 
-        ">_"        => AmbigGt,
+        "macro_rules" => MacroRules,
+        ">_"          => AmbigGt,
 
         "["         => Symbol(LBracket),
         "]"         => Symbol(RBracket),
@@ -128,6 +129,11 @@ extern {
     }
 }
 
+// Non-terminal
+IDENT: &'input str = {
+    <LEXIDENT>,
+    "macro_rules" => "macro_rules",
+};
 op_gt       = { ">_", ">" };
 op_shr      = ">_" ">";
 op_shreq    = ">_" ">_" "=";
@@ -265,6 +271,21 @@ pub tt: Token<'input> = {
     OUTERDOC        => Token::OuterDoc(<>),
 };
 
+// Plugin & Macro
+#[inline]
+macro_def: ItemKind<'input> =
+    "macro_rules" "!" <name: LEXIDENT> <tts: tts_like_item>
+        => ItemKind::MacroDef{ name, tts };
+tts_like_item: Vec<Token<'input>> = {
+    "(" <tts> ")" ";",
+    "[" <tts> "]" ";",
+    "{" <tts> "}",
+};
+tts_like_expr: Vec<Token<'input>> = {
+    "(" <tts> ")",
+    "[" <tts> "]",
+};
+
 // Attributes
 inner_attr: Attr<'input> = {
     "#" "!" "[" <attr_content> "]",
@@ -357,6 +378,10 @@ item_detail: ItemKind<'input> = {
     "impl" <opt_templ: template> <tr_name: trait_name> "for" <ty_for: ty> <whs: where_clause>
            "{" <items: impl_item*> "}"
         => ItemKind::ImplTrait{ templ: merge_templ(opt_templ, whs), tr_name, ty_for, items },
+    <macro_def>
+        => <>,
+    <name: LEXIDENT> "!" <tts: tts_like_item>
+        => ItemKind::PluginInvoke{ name, tts }
 };
 use_comp: PathComp<'input> = {
     "self" "::"
