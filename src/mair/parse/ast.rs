@@ -24,13 +24,13 @@ pub enum ItemKind<'a> {
     UseAll      (Path<'a>),
     UseSome     { path: Path<'a>, names: Vec<UseName<'a>> },
     Mod         { name: &'a str, items: Option<Vec<Item<'a>>> },
-    Func        { name: &'a str, templ: Template<'a>, args: Vec<&'a str>, ty: FuncTy<'a> },
+    Func        { sig: FuncSig<'a>, body: FuncBody<'a> },
     Extern      { abi: Option<&'a str>, decls: Vec<ExternFuncDecl<'a>> },
     Type        { alias: &'a str, templ: Template<'a>, origin: Ty<'a> },
     StructUnit  { name: &'a str, templ: Template<'a> },
     StructTuple { name: &'a str, templ: Template<'a>, elems: Vec<StructTupleElem<'a>> },
     StructNormal{ name: &'a str, templ: Template<'a>, fields: Vec<StructField<'a>> },
-    Enum        { name: &'a str, templ: Template<'a>, vars: Vec<ElemVar<'a>> },
+    Enum        { name: &'a str, templ: Template<'a>, vars: Vec<EnumVar<'a>> },
     Const       { name: &'a str, ty: Ty<'a>, val: Expr<'a> },
     Static      { name: &'a str, ty: Ty<'a>, val: Expr<'a> },
     Trait       { name: &'a str, templ: Template<'a>, items: Vec<TraitItem<'a>> },
@@ -48,11 +48,9 @@ pub struct UseName<'a> {
 /// A function declare used in `extern` block.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ExternFuncDecl<'a> {
-    pub name:   &'a str,
+    pub sig:    FuncSig<'a>, // TODO: variadic function
     pub is_pub: bool,
     pub attrs:  Vec<Attr<'a>>,
-    pub args:   Vec<&'a str>,
-    pub ty:     FuncTy<'a>, // TODO: variadic function
 }
 
 /// An element of a tuple-like struct or enum variant.
@@ -74,7 +72,7 @@ pub struct StructField<'a> {
 
 /// An variant of an `enum`.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ElemVar<'a> {
+pub enum EnumVar<'a> {
     Unit  { name: &'a str, attrs: Vec<Attr<'a>> },
     Tuple { name: &'a str, attrs: Vec<Attr<'a>>, elems: Vec<StructTupleElem<'a>> },
     Struct{ name: &'a str, attrs: Vec<Attr<'a>>, fields: Vec<StructField<'a>> },
@@ -83,12 +81,11 @@ pub enum ElemVar<'a> {
 /// An item inside `trait`.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TraitItem<'a> {
-    Type{ name: &'a str, attrs: Vec<Attr<'a>>, default: Option<Ty<'a>> },
+    Type{ name: &'a str, attrs: Vec<Attr<'a>>,
+          trait_bounds: Vec<TraitName<'a>>, default: Option<Ty<'a>> },
     Func{
-        name: &'a str,
-        attrs: Vec<Attr<'a>>,
-        templ: Template<'a>,
-        ty: FuncTy<'a>,
+        sig:     FuncSig<'a>,
+        attrs:   Vec<Attr<'a>>,
         default: Option<FuncBody<'a>>,
     },
 }
@@ -98,11 +95,9 @@ pub enum TraitItem<'a> {
 pub enum ImplItem<'a> {
     Type{ name: &'a str, attrs: Vec<Attr<'a>>, val: Ty<'a> },
     Func{
-        name: &'a str,
+        sig:   FuncSig<'a>,
         attrs: Vec<Attr<'a>>,
-        templ: Template<'a>,
-        ty: FuncTy<'a>,
-        body: FuncBody<'a>,
+        body:  FuncBody<'a>,
     },
 }
 
@@ -125,15 +120,38 @@ pub struct PathComp<'a> {
 pub struct Template<'a> {
     pub lifetimes:    Vec<&'a str>,
     pub tys:          Vec<&'a str>,
-    pub trait_bounds: Vec<(Ty<'a>, TraitName<'a>)>,
+    pub trait_bounds: Vec<TraitBound<'a>>,
 }
 
-/// The name to refer a specific trait.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct TraitName<'a> {
-    pub name:      &'a str,
-    pub lifetimes: Vec<&'a str>,
-    pub params:    Vec<Ty<'a>>,
+pub struct TraitBound<'a>(pub Ty<'a>, pub Vec<TraitName<'a>>);
+
+/// The signature of a function, including templates, trait bounds,
+/// argument names and the function type.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct FuncSig<'a> {
+    pub name:     &'a str,
+    pub templ:    Template<'a>,
+    pub self_arg: SelfArg,
+    pub args:     Vec<FuncArg<'a>>,
+}
+
+/// An argument of function.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct FuncArg<'a> { // TODO: pattern matching for arguments
+    pub name: &'a str,
+    pub ty:   Ty<'a>,
+}
+
+/// The argument `self`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum SelfArg {
+    /// No argument `self`. For static function or non-member-function.
+    Static,
+    /// fn([mut] self, ...)
+    Consume{ is_mut: bool },
+    /// fn(&[mut] self, ...)
+    Ref{ is_mut: bool },
 }
 
 /// A type.
@@ -145,23 +163,25 @@ pub enum Ty<'a> {
     Diverging,
     /// A generic type applied with type paramaters, like `Vec<i32>`.
     /// No paramaters indicates a normal type, like `i32`.
-    Apply(Path<'a>, Vec<Ty<'a>>),
+    Apply(TyApply<'a>),
     /// A tuple type, like `(i32, i64)`.
     Tuple(Vec<Ty<'a>>),
     /// A function pointer, like `fn(i32, u8) -> usize`.
-    Func(FuncTy<'a>),
+    Func{ args: Vec<Ty<'a>>, ret: Box<Ty<'a>> },
     /// Reference.
     Ref{ is_mut: bool, lifetime: Option<&'a str>, inner: Box<Ty<'a>> },
     /// Pointers.
     Ptr{ is_mut: bool, inner: Box<Ty<'a>> },
 }
 
-/// The type of function.
+/// A simple type, specialized type or trait name.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct FuncTy<'a> {
-    pub args: Vec<Ty<'a>>,
-    pub ret:  Box<Ty<'a>>,
+pub struct TyApply<'a> {
+    pub name:      Path<'a>,
+    pub lifetimes: Vec<&'a str>,
+    pub params:    Vec<Ty<'a>>,
 }
+pub type TraitName<'a> = TyApply<'a>;
 
 /// An attribute.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -241,3 +261,20 @@ pub enum Literal<'a> {
 }
 
 impl<'a> Eq for Literal<'a> {} // The float value is never NaN.
+
+impl<'a> Ty<'a> {
+    pub fn from_path(path: Path<'a>) -> Self {
+        Ty::Apply(TyApply{ name: path, lifetimes: vec![], params: vec![] })
+    }
+
+    pub fn from_name(name: &'a str) -> Self {
+        Ty::from_path(Path{
+            is_absolute: false,
+            comps: vec![PathComp{ body: name, hint: None }],
+        })
+    }
+
+    pub fn unit() -> Self {
+        Ty::Tuple(vec![])
+    }
+}
