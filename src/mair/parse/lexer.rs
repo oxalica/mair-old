@@ -28,6 +28,8 @@ pub enum LexToken<'input> {
     /// an `AmbigGt` and a normal `Symbol`, for that the first `>` can be either the end of
     /// template or a bitwise right shift operator when combining the following `>`.
     AmbigGt,
+    /// Identifier `macro_rules`.
+    MacroRules,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -263,6 +265,7 @@ lazy_static! {
         (?P<lifetime>'[A-Za-z_]\w*)|
         (?P<symbol>{symbols})|
         (?P<keyword>(?:{keywords})\b)|
+        (?P<macro_rules>macro_rules\b)|
         (?P<ident>[A-Za-z_]\w*)
     )"#, num=RESTR_NUM, chr=RESTR_CHAR, symbols=*RESTR_SYMBOLS, keywords=*RESTR_KEYWORDS
     )).unwrap();
@@ -472,6 +475,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     _ if is("line_comment")         => None,
                     m if is("lifetime")             => Some(Lifetime(&m[1..])),
                     m if is("keyword")              => Some(Keyword(KEYWORDS[m])),
+                    _ if is("macro_rules")          => Some(MacroRules),
                     m if is("ident")                => Some(Ident(m)),
                     _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
                     _ if is("char")                 => Some(Literal(parse_cap_char(&cap)?)),
@@ -604,6 +608,8 @@ mod test {
         assert_eq!(lex("asc"),      Ok(vec![(Ident("asc"), 0..3)]));
         assert_eq!(lex("a0__c_"),   Ok(vec![(Ident("a0__c_"), 0..6)]));
         assert_eq!(lex("_9 a0"),    Ok(vec![(Ident("_9"), 0..2), (Ident("a0"), 3..5)]));
+        assert_eq!(lex("macro_ruleS"), Ok(vec![(Ident("macro_ruleS"), 0..11)]));
+        assert_eq!(lex("macro_rules"), Ok(vec![(MacroRules, 0..11)]));
     }
 
     #[test]
