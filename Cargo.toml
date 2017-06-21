@@ -2,7 +2,8 @@
 name = "mair"
 version = "0.1.0"
 authors = ["uHOOCCOOHu <hooccooh1896@gmail.com>"]
-build = "build.rs"
+build = "src/build.rs"
+include = ["Cargo.toml", "src/**/*"]
 
 [lib]
 name = "mair"
