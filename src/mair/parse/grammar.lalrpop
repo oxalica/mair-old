@@ -243,17 +243,34 @@ keyword: KeywordType = {
 
 // Macros
 // Something separated by `D`. Tail `D` is acceptable.
-tuple_of_delim<T, D>: Vec<T> = {
-    <v:(<T> D)*> <e:T?> => match e {
-        None => v,
+tuple_of_delim<T, D>: Vec<T> =
+    <v: (<T> D)*> <e: T?> => match e {
+        None    => v,
         Some(e) => {
             let mut v = v;
             v.push(e);
             v
-        }
-    }
-};
+        },
+    };
 tuple_of<T>: Vec<T> = tuple_of_delim<T, ",">;
+// Something separated by `D` and must contains `D`. Tail `D` is acceptable.
+must_tuple_of<T>: Vec<T> =
+    <v: (<T> ",")+> <e: T?> => match e {
+        None    => v,
+        Some(e) => {
+            let mut v = v;
+            v.push(e);
+            v
+        },
+    };
+// Something separated by `D`. Tail `D` is unacceptable.
+tuple_of_delim_notail<T, D>: Vec<T> =
+    <v: (<T> ",")+> <e: T> => {
+        let mut v = v;
+        v.push(e);
+        v
+    };
+tuple_of_notail<T>: Vec<T> = tuple_of_delim_notail<T, ",">;
 
 // Token tree
 pub tts: Vec<Token<'input>> = tt*;
@@ -510,3 +527,112 @@ fn_body: FuncBody<'input> =
 fn_arg: FuncArg<'input> = // TODO: pattern matching for arguments
     <name: IDENT> ":" <ty: ty>
         => FuncArg{ name, ty };
+
+// Pattern
+pat: Pat<'input> = {
+    <var: QIDENT>
+        => if is_placeholder(&var) { Pat::Hole } else { Pat::Var(var) },
+    <LITERAL>
+        => Pat::Literal(<>),
+    <LITERAL> "..." <LITERAL>
+        => Pat::Range(<>),
+    "(" <must_tuple_of<pat>> ")"
+        => Pat::Tuple(<>),
+    <name: QIDENT> "(" <elems: tuple_of<pat>> ")"
+        => Pat::DestructTuple{ name, elems },
+    <name: QIDENT> "{" <fields: tuple_of<struct_pat_field>> "}"
+        => Pat::DestructNormal{ name, fields, ellipsis: false },
+    <name: QIDENT> "{" <fields: (<struct_pat_field> ",")*> ".." "}"
+        => Pat::DestructNormal{ name, fields, ellipsis: true },
+    <name: LEXIDENT> "!" <tts: tts_like_expr>
+        => Pat::PluginInvoke{ name, tts },
+};
+match_arm: MatchArm<'input> =
+    <pats: tuple_of_delim<pat, "|">> "=>" <expr: expr>
+        => MatchArm{ pats, expr };
+struct_pat_field: (&'input str, Pat<'input>) = {
+    <name: IDENT>
+        => (name, Pat::Var(Path{
+            is_absolute: false,
+            comps: vec![PathComp{ body: name, hint: None }]
+        })),
+    <name: IDENT> ":" <pat: pat>
+        => (name, pat),
+};
+
+// Expression
+expr: Expr<'input> = {
+    <LITERAL>
+        => Expr::Literal(<>),
+    <QIDENT>
+        => Expr::Path(<>),
+    "(" <expr> ")"
+        => <>,
+    "(" <must_tuple_of<expr>> ")"
+        => Expr::Tuple(<>),
+    <ty: ty> "{" <params: tuple_of<struct_expr_field>> "}"
+        => Expr::Struct{ ty, params, base: None },
+    <ty: ty> "{" <params: (<struct_expr_field> ",")*> ".." <base: expr> "}"
+        => Expr::Struct{ ty, params, base: Some(Box::new(base)) },
+    <block_expr>
+        => <>,
+    // member call
+    // field
+    "[" <elem: expr> ";" <len: expr> "]"
+        => Expr::ArrayFill{ elem: Box::new(elem), len: Box::new(len) },
+    "[" <tuple_of<expr>> "]"
+        => Expr::ArrayLit(<>),
+    // unary op
+    // binary op
+    // call
+    // lambda
+    "loop" <block_expr>
+        => Expr::Loop(Box::new(<>)),
+    "break" <opt_lt: LIFETIME?>
+        => Expr::Break(opt_lt),
+    "continue" <opt_lt: LIFETIME?>
+        => Expr::Continue(opt_lt),
+    "while" <cond: expr> <body: block_expr>
+        => Expr::While{ cond: Box::new(cond), body: Box::new(body) },
+    "for" <iter: pat> <itee: expr> <body: block_expr>
+        => Expr::For{ iter, itee: Box::new(itee), body: Box::new(body) },
+    "if" <cond: expr> <do_expr: block_expr> <else_expr: else_expr>
+        => Expr::If{ cond: Box::new(cond), do_expr: Box::new(do_expr), else_expr },
+    "match" <expr: expr> <arms: match_arm*>
+        => Expr::Match{ expr: Box::new(expr), arms },
+    "if" "let" <pat: pat> "=" <cond: expr> <do_expr: block_expr> <else_expr: else_expr>
+        => Expr::IfLet{ pat, cond: Box::new(cond), do_expr: Box::new(do_expr), else_expr },
+    "while" "let" <pat: pat> "=" <cond: expr> <body: block_expr>
+        => Expr::WhileLet{ pat, cond: Box::new(cond), body: Box::new(body) },
+    "return"
+        => Expr::Return,
+    <name: LEXIDENT> "!" <tts: tts_like_expr>
+        => Expr::PluginInvoke{ name, tts },
+};
+struct_expr_field: (&'input str, Expr<'input>) = {
+    <name: IDENT>
+        => (name, Expr::Path(Path{
+            is_absolute: false,
+            comps: vec![PathComp{ body: name, hint: None }]
+        })),
+    <name: IDENT> ":" <expr: expr>
+        => (name, expr),
+};
+else_expr: Option<Box<Expr<'input>>> = {
+        => None,
+    "else" <block_expr>
+        => Some(Box::new(<>)),
+    "else" "if" <cond: expr> <do_expr: block_expr> <else_expr: else_expr>
+        => Some(Box::new(Expr::If{ cond: Box::new(cond), do_expr: Box::new(do_expr), else_expr })),
+};
+block_expr: Expr<'input> =
+    "{" <stmts: block_item*> <ret: expr?> "}"
+        => Expr::Block{ stmts, ret: ret.map(Box::new) };
+block_item: Stmt<'input> = {
+    <item>
+        => Stmt::Item(<>),
+    "let" <pat: pat> <ty: (":" <ty>)?> "=" <expr: expr> ";"
+        => Stmt::Let{ pat, ty, expr },
+    <expr> ";"
+        => Stmt::Expr(<>),
+};
