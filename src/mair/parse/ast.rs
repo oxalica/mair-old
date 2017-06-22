@@ -137,6 +137,7 @@ pub struct FuncSig<'a> {
     pub templ:    Template<'a>,
     pub self_arg: SelfArg,
     pub args:     Vec<FuncArg<'a>>,
+    pub ret:      Ty<'a>,
 }
 
 /// An argument of function.

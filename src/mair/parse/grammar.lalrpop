@@ -486,7 +486,7 @@ pub ty: Ty<'input> = {
     <apply: trait_name> // aka. `TyApply`
         => if is_placeholder(&apply.name) { Ty::Hole }
            else { Ty::Apply(apply) },
-    "(" <tuple_of<ty>> ")"
+    "(" <must_tuple_of<ty>> ")"
         => Ty::Tuple(<>),
     "fn" "(" <args: tuple_of<ty>> ")" <ret: ("->" <ty>)?>
         => Ty::Func{ args, ret: Box::new(ret.unwrap_or_else(Ty::unit)) },
@@ -512,8 +512,15 @@ trait_name: TraitName<'input> = {
 fn_sig: FuncSig<'input> =
     <name: IDENT> <opt_templ: template>
     "(" <self_arg: fn_self> <args: tuple_of<fn_arg>> ")"
+    <ret: ("->" <ty>)?>
     <whs: where_clause>
-        => FuncSig{ name, templ: merge_templ(opt_templ, whs), self_arg, args };
+        => FuncSig{
+            name,
+            templ: merge_templ(opt_templ, whs),
+            self_arg,
+            args,
+            ret: ret.unwrap_or(Ty::Tuple(vec![])),
+        };
 #[inline]
 fn_self: SelfArg = {
         => SelfArg::Static,
