@@ -198,8 +198,75 @@ pub enum Attr<'a> {
     Sub(&'a str, Vec<Attr<'a>>),
 }
 
-pub type FuncBody<'a> = Vec<Token<'a>>;
-pub type Expr<'a> = Vec<Token<'a>>;
+pub type FuncBody<'a> = Vec<Token<'a>>; // TODO
+
+/// A statement.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Stmt<'a> {
+    Item(Item<'a>),
+    Let { pat: Pat<'a>, ty: Option<Ty<'a>>, expr: Expr<'a> },
+    Expr(Expr<'a>),
+}
+
+/// An expression.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
+    Literal     (Literal<'a>),
+    Path        (Path<'a>),
+    Tuple       (Vec<Expr<'a>>),
+    Struct      { ty: Ty<'a>, params: Vec<(&'a str, Expr<'a>)>, base: Option<Box<Expr<'a>>> },
+    Block       { stmts: Vec<Stmt<'a>>, ret: Option<Box<Expr<'a>>> },
+    MemberCall  { obj: Box<Expr<'a>>, func: &'a str, params: Vec<Expr<'a>> },
+    Field       { lhs: Box<Expr<'a>>, member: &'a str },
+    ArrayFill   { elem: Box<Expr<'a>>, len: Box<Expr<'a>> },
+    ArrayLit    (Vec<Expr<'a>>),
+    // Index is BinaryOp
+    // Range is BinaryOp
+    UnaryOp     (UnaryOp, Box<Expr<'a>>),
+    BinaryOp    (Box<Expr<'a>>, BinaryOp, Box<Expr<'a>>),
+    Call        { func: Box<Expr<'a>>, params: Vec<Expr<'a>> },
+    Lambda      { is_move: bool, sig: FuncSig<'a>, body: Box<Expr<'a>> },
+    Loop        (Box<Expr<'a>>),
+    Break       (Option<&'a str>),
+    Continue    (Option<&'a str>),
+    While       { cond: Box<Expr<'a>>, body: Box<Expr<'a>> },
+    For         { iter: Pat<'a>, itee: Box<Expr<'a>>, body: Box<Expr<'a>> },
+    If          { cond: Box<Expr<'a>>, do_expr: Box<Expr<'a>>, else_expr: Option<Box<Expr<'a>>> },
+    Match       { expr: Box<Expr<'a>>, arms: Vec<MatchArm<'a>> },
+    IfLet       { pat: Pat<'a>, cond: Box<Expr<'a>>,
+                  do_expr: Box<Expr<'a>>, else_expr: Option<Box<Expr<'a>>> },
+    WhileLet    { pat: Pat<'a>, cond: Box<Expr<'a>>, body: Box<Expr<'a>> },
+    Return,
+    PluginInvoke{ name: &'a str, tts: Vec<Token<'a>> }
+}
+
+/// A pattern.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Pat<'a> {
+    /// The placeholder `_`.
+    Hole,
+    /// A unit-like enum variant or unit struct name. eg. `None`
+    Var             (Path<'a>),
+    /// An literal. eg. `123`
+    Literal         (Literal<'a>),
+    /// A range patterns. eg. `1...2`, `'a'...'z'`
+    Range           (Literal<'a>, Literal<'a>),
+    /// A tuple. eg. `(_, _)`
+    Tuple           (Vec<Pat<'a>>),
+    /// A tuple-like enum variant or tuple struct. eg. `Some(1)`
+    DestructTuple   { name: Path<'a>, elems: Vec<Pat<'a>> },
+    /// A struct-like enum variant or normal struct. eg. `Pt{ x: xx, y }`
+    DestructNormal  { name: Path<'a>, fields: Vec<(&'a str, Pat<'a>)>, ellipsis: bool},
+    /// A plugin/macro generating a pattern.
+    PluginInvoke    { name: &'a str, tts: Vec<Token<'a>> }
+}
+
+/// A match arm.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct MatchArm<'a> {
+    pub pats: Vec<Pat<'a>>,
+    pub expr: Expr<'a>,
+}
 
 /// A token or the root of a token tree.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -235,10 +302,14 @@ pub enum Delimiter {
 
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum OperatorType {
+pub enum UnaryOp {
     // https://doc.rust-lang.org/grammar.html#unary-operator-expressions
     Neg, Deref, Not,
+}
 
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum BinaryOp {
     // https://doc.rust-lang.org/grammar.html#binary-operator-expressions
     Plus, Sub, Mul, Div, Mod,
     And, Or, Xor, Shl, Shr,
