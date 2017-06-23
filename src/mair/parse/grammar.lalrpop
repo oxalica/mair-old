@@ -289,7 +289,6 @@ pub tt: Token<'input> = {
 };
 
 // Plugin & Macro
-#[inline]
 macro_def: ItemKind<'input> =
     "macro_rules" "!" <name: LEXIDENT> <tts: tts_like_item>
         => ItemKind::MacroDef{ name, tts };
@@ -428,7 +427,6 @@ struct_tuple_elem: StructTupleElem<'input> =
 struct_field: StructField<'input> =
     <attrs: outer_attr*> <pub_tag: "pub"?> <name: IDENT> ":" <ty: ty>
         => StructField{ name, is_pub: pub_tag.is_some(), attrs, ty };
-#[inline]
 enum_var: EnumVar<'input> = {
     <attrs: outer_attr*> <name: IDENT>
         => EnumVar::Unit{ name, attrs },
@@ -437,7 +435,6 @@ enum_var: EnumVar<'input> = {
     <attrs: outer_attr*> <name: IDENT> "{" <fields: tuple_of<struct_field>> "}"
         => EnumVar::Struct{ name, attrs, fields },
 };
-#[inline]
 trait_item: TraitItem<'input> = {
     <attrs: outer_attr*> "type" <tyb: ty_opt_trait_bound> <default: ("=" <ty>)?> ";"
         => TraitItem::Type{ name: tyb.0, attrs, trait_bounds: (tyb.1).1, default },
@@ -446,7 +443,6 @@ trait_item: TraitItem<'input> = {
     <attrs: outer_attr*> "fn" <sig: fn_sig> <body: fn_body>
         => TraitItem::Func{ sig, attrs, default: Some(body) },
 };
-#[inline]
 impl_item: ImplItem<'input> = {
     <attrs: outer_attr*> "type" <name: IDENT> "=" <val: ty> ";"
         => ImplItem::Type{ name, attrs, val },
@@ -455,7 +451,6 @@ impl_item: ImplItem<'input> = {
 };
 
 // Template & Where clause
-#[inline]
 template: Template<'input> = {
         => Template{ lifetimes: vec![], tys: vec![], trait_bounds: vec![] },
     "<" <tuple_of<LIFETIME>> close_templ
@@ -475,7 +470,6 @@ ty_opt_trait_bound: (&'input str, TraitBound<'input>) =
 trait_bound: TraitBound<'input> =
     <ty> ":" <tuple_of_delim<trait_name, "+">>
         => TraitBound(<>);
-#[inline]
 where_clause: Vec<TraitBound<'input>> =
     <("where" <tuple_of<trait_bound>>)?>
         => <>.unwrap_or(vec![]);
@@ -521,7 +515,6 @@ fn_sig: FuncSig<'input> =
             args,
             ret: ret.unwrap_or(Ty::Tuple(vec![])),
         };
-#[inline]
 fn_self: SelfArg = {
         => SelfArg::Static,
     "&" <mut_tag: "mut"?> "self"
