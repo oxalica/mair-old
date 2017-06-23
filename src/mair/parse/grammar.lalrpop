@@ -371,24 +371,21 @@ item_detail: ItemKind<'input> = {
         => ItemKind::Func{ sig, body },
     "extern" <abi: IDENT?> "{" <decls: extern_decl*> "}"
         => ItemKind::Extern{ abi, decls },
-    "type" <alias: IDENT> <opt_templ: template> <whs: where_clause> "=" <origin: ty> ";"
-        => ItemKind::Type{ alias, templ: merge_templ(opt_templ, whs), origin },
-    "struct" <name: IDENT> <opt_templ: template> <whs: where_clause> ";"
-        => ItemKind::StructUnit{ name, templ: merge_templ(opt_templ, whs) },
+    "type" <alias: IDENT> <templ: templ_whs> "=" <origin: ty> ";"
+        => ItemKind::Type{ alias, templ, origin },
+    "struct" <name: IDENT> <templ: templ_whs> ";"
+        => ItemKind::StructUnit{ name, templ },
     "struct" <name: IDENT> <opt_templ: template> "(" <elems: tuple_of<struct_tuple_elem>> ")"
              <whs: where_clause> ";"
         => ItemKind::StructTuple{ name, templ: merge_templ(opt_templ, whs), elems },
-    "struct" <name: IDENT> <opt_templ: template> <whs: where_clause>
-             "{" <fields: tuple_of<struct_field>> "}"
-        => ItemKind::StructNormal{ name, templ: merge_templ(opt_templ, whs), fields },
-    "enum" <name: IDENT> <opt_templ: template> <whs: where_clause>
-           "{" <vars: tuple_of<enum_var>> "}"
-        => ItemKind::Enum{ name, templ: merge_templ(opt_templ, whs), vars },
+    "struct" <name: IDENT> <templ: templ_whs> "{" <fields: tuple_of<struct_field>> "}"
+        => ItemKind::StructNormal{ name, templ, fields },
+    "enum" <name: IDENT> <templ: templ_whs> "{" <vars: tuple_of<enum_var>> "}"
+        => ItemKind::Enum{ name, templ, vars },
     // TODO: const
     // TODO: static
-    "trait" <name: IDENT> <opt_templ: template> <whs: where_clause>
-            "{" <items: trait_item*> "}"
-        => ItemKind::Trait{ name, templ: merge_templ(opt_templ, whs), items },
+    "trait" <name: IDENT> <templ: templ_whs> "{" <items: trait_item*> "}"
+        => ItemKind::Trait{ name, templ, items },
     "impl" <opt_templ: template> <ty_for: ty> <whs: where_clause>
            "{" <items: impl_item*> "}"
         => ItemKind::ImplType{ templ: merge_templ(opt_templ, whs), ty_for, items },
@@ -452,6 +449,9 @@ impl_item: ImplItem<'input> = {
 };
 
 // Template & Where clause
+templ_whs: Template<'input> =
+    <opt_templ: template> <whs: where_clause>
+        => merge_templ(opt_templ, whs);
 template: Template<'input> = {
         => Template{ lifetimes: vec![], tys: vec![], trait_bounds: vec![] },
     "<" <tuple_of<LIFETIME>> close_templ
