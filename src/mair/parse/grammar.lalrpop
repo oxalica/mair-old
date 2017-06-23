@@ -8,6 +8,7 @@ use self::LexToken::*;
 use self::LexSymbol::*;
 use super::{is_placeholder, merge_templ};
 
+#[LALR]
 grammar<'input>;
 
 extern {
