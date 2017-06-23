@@ -134,7 +134,7 @@ IDENT: &'input str = {
     <LEXIDENT>,
     "macro_rules" => "macro_rules",
 };
-op_gt       = { ">_", ">" };
+close_templ = { ">_", ">" };
 op_shr      = ">_" ">";
 op_shreq    = ">_" ">_" "=";
 
@@ -458,10 +458,10 @@ impl_item: ImplItem<'input> = {
 #[inline]
 template: Template<'input> = {
         => Template{ lifetimes: vec![], tys: vec![], trait_bounds: vec![] },
-    "<" <tuple_of<LIFETIME>> op_gt
+    "<" <tuple_of<LIFETIME>> close_templ
         => Template{ lifetimes: <>, tys: vec![], trait_bounds: vec![] },
     "<" <lifetimes: (<LIFETIME> ",")*>
-        <trs: (<ty_opt_trait_bound> ",")*> <last: ty_opt_trait_bound> op_gt
+        <trs: (<ty_opt_trait_bound> ",")*> <last: ty_opt_trait_bound> close_templ
         => {
             let mut trs = trs;
             trs.push(last);
@@ -498,9 +498,9 @@ pub ty: Ty<'input> = {
 trait_name: TraitName<'input> = {
     <name: QIDENT>
         => TraitName{ name, lifetimes: vec![], params: vec![] },
-    <name: QIDENT> "<" <lifetimes: tuple_of<LIFETIME>> op_gt
+    <name: QIDENT> "<" <lifetimes: tuple_of<LIFETIME>> close_templ
         => TraitName{ name, lifetimes, params: vec![] },
-    <name: QIDENT> "<" <lifetimes: (<LIFETIME> ",")*> <params: (<ty> ",")*> <last: ty> op_gt
+    <name: QIDENT> "<" <lifetimes: (<LIFETIME> ",")*> <params: (<ty> ",")*> <last: ty> close_templ
         => {
             let mut params = params;
             params.push(last);
