@@ -1,9 +1,9 @@
 pub use self::parser::{
-    parse_tts,
-    parse_tt,
     parse_module,
     parse_item,
     parse_ty,
+    parse_pat,
+    parse_expr,
 };
 
 use super::ast::{Path, Template, TraitBound};

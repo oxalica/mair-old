@@ -1,5 +1,5 @@
 use std::cmp::Eq;
-use super::lexer::KeywordType;
+use super::lexer::{LexToken, Loc};
 use super::{imax, fmax};
 
 /// A module, or a crate, as well as a rust source file.
@@ -37,8 +37,7 @@ pub enum ItemKind<'a> {
     ImplType    { templ: Template<'a>, ty_for: Ty<'a>, items: Vec<ImplItem<'a>> },
     ImplTrait   { templ: Template<'a>, tr_name: TraitName<'a>, ty_for: Ty<'a>, items: Vec<ImplItem<'a>> },
 
-    MacroDef    { name: &'a str, tts: Vec<Token<'a>> },
-    PluginInvoke{ name: &'a str, tts: Vec<Token<'a>> },
+    PluginInvoke(PluginInvoke<'a>),
 }
 
 /// The item or variable referred in a `use` declaration.
@@ -199,7 +198,7 @@ pub enum Attr<'a> {
     Sub(&'a str, Vec<Attr<'a>>),
 }
 
-pub type FuncBody<'a> = Vec<Token<'a>>; // TODO
+pub type FuncBody<'a> = Expr<'a>; // TODO
 
 /// A statement.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -238,7 +237,7 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
                   do_expr: Box<Expr<'a>>, else_expr: Option<Box<Expr<'a>>> },
     WhileLet    { pat: Pat<'a>, cond: Box<Expr<'a>>, body: Box<Expr<'a>> },
     Return,
-    PluginInvoke{ name: &'a str, tts: Vec<Token<'a>> }
+    PluginInvoke(PluginInvoke<'a>),
 }
 
 /// A pattern.
@@ -259,7 +258,7 @@ pub enum Pat<'a> {
     /// A struct-like enum variant or normal struct. eg. `Pt{ x: xx, y }`
     DestructNormal  { name: Path<'a>, fields: Vec<(&'a str, Pat<'a>)>, ellipsis: bool},
     /// A plugin/macro generating a pattern.
-    PluginInvoke    { name: &'a str, tts: Vec<Token<'a>> }
+    PluginInvoke    (PluginInvoke<'a>),
 }
 
 /// A match arm.
@@ -267,28 +266,6 @@ pub enum Pat<'a> {
 pub struct MatchArm<'a> {
     pub pats: Vec<Pat<'a>>,
     pub expr: Expr<'a>,
-}
-
-/// A token or the root of a token tree.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Token<'a> {
-    /// A token tree delimited with `()`, `[]` or `{}`.
-    Delimited(Delimiter, Vec<Token<'a>>),
-    /// An inner document.
-    InnerDoc(&'a str),
-    /// An outer document.
-    OuterDoc(&'a str),
-    /// An keyword.
-    Keyword(KeywordType),
-    /// An identifier or `_`.
-    Ident(&'a str),
-    /// A lifetime.
-    Lifetime(&'a str),
-    /// A symbol(can't be a delimiter), always the longest. For example, `>>` will be always
-    /// parsed into a single `Symbol` rather than 2 `>`s, even though it's a part of template.
-    Symbol(&'static str),
-    /// A literal.
-    Literal(Literal<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -301,6 +278,15 @@ pub enum Delimiter {
     Brace,
 }
 
+/// A plugin(including macro) invocation.
+/// eg. `name! ( tts... )`
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct PluginInvoke<'a> {
+    pub name:  &'a str,
+    pub delim: Delimiter,
+    pub ident: Option<&'a str>,
+    pub tts:   Vec<(LexToken<'a>, Loc)>,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum UnaryOp {

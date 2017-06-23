@@ -8,6 +8,7 @@ use self::LexToken::*;
 use self::LexSymbol::*;
 use super::{is_placeholder, merge_templ};
 
+#[LALR]
 grammar<'input>;
 
 extern {
@@ -15,13 +16,14 @@ extern {
     type Error = LexicalError<usize>;
 
     enum LexToken<'input> {
-        LEXIDENT    => Ident(<&'input str>),
+        IDENT       => Ident(<&'input str>),
         LIFETIME    => Lifetime(<&'input str>),
         INNERDOC    => InnerDoc(<&'input str>),
         OUTERDOC    => OuterDoc(<&'input str>),
         LITERAL     => Literal(<Lit<'input>>),
+        PLUGININVOKE_ITEM => PluginInvokeItem(<PluginInvoke<'input>>),
+        PLUGININVOKE_EXPR => PluginInvokeExpr(<PluginInvoke<'input>>),
 
-        "macro_rules" => MacroRules,
         ">_"          => AmbigGt,
 
         "["         => Symbol(LBracket),
@@ -130,116 +132,9 @@ extern {
 }
 
 // Non-terminal
-IDENT: &'input str = {
-    <LEXIDENT>,
-    "macro_rules" => "macro_rules",
-};
 close_templ = { ">_", ">" };
 op_shr      = ">_" ">";
 op_shreq    = ">_" ">_" "=";
-
-symbol: &'static str = {
-    op_shreq    => ">>=",
-    op_shr      => ">>",
-
-    ","         => ",",
-    ";"         => ";",
-    "@"         => "@",
-    "#"         => "#",
-    "$"         => "$",
-    "?"         => "?",
-    "."         => ".",
-    ".."        => "..",
-    "..."       => "...",
-    ":"         => ":",
-    "::"        => "::",
-    "!"         => "!",
-    "<-"        => "<-",
-    "->"        => "->",
-    "=>"        => "=>",
-
-    "+"         => "+",
-    "-"         => "-",
-    "*"         => "*",
-    "/"         => "/",
-    "%"         => "%",
-    "&"         => "&",
-    "|"         => "|",
-    "^"         => "^",
-    "<<"        => "<<",
-    "&&"        => "&&",
-    "||"        => "||",
-    "=="        => "==",
-    "!="        => "!=",
-    "<"         => "<",
-    ">"         => ">",
-    "<="        => "<=",
-    "="         => "=",
-    "+="        => "+=",
-    "-="        => "-=",
-    "*="        => "*=",
-    "/="        => "/=",
-    "%="        => "%=",
-    "&="        => "&=",
-    "|="        => "|=",
-    "^="        => "^=",
-    "<<="       => "<<=",
-};
-
-keyword: KeywordType = {
-    "abstract"  => KwAbstract,
-    "alignof"   => KwAlignof,
-    "as"        => KwAs,
-    "become"    => KwBecome,
-    "box"       => KwBox,
-    "break"     => KwBreak,
-    "const"     => KwConst,
-    "continue"  => KwContinue,
-    "crate"     => KwCrate,
-    "do"        => KwDo,
-    "else"      => KwElse,
-    "enum"      => KwEnum,
-    "extern"    => KwExtern,
-    "false"     => KwFalse,
-    "final"     => KwFinal,
-    "fn"        => KwFn,
-    "for"       => KwFor,
-    "if"        => KwIf,
-    "impl"      => KwImpl,
-    "in"        => KwIn,
-    "let"       => KwLet,
-    "loop"      => KwLoop,
-    "macro"     => KwMacro,
-    "match"     => KwMatch,
-    "mod"       => KwMod,
-    "move"      => KwMove,
-    "mut"       => KwMut,
-    "offsetof"  => KwOffsetof,
-    "override"  => KwOverride,
-    "priv"      => KwPriv,
-    "proc"      => KwProc,
-    "pub"       => KwPub,
-    "pure"      => KwPure,
-    "ref"       => KwRef,
-    "return"    => KwReturn,
-    "Self"      => KwSelfTy,
-    "self"      => KwSelfVar,
-    "sizeof"    => KwSizeof,
-    "static"    => KwStatic,
-    "struct"    => KwStruct,
-    "super"     => KwSuper,
-    "trait"     => KwTrait,
-    "true"      => KwTrue,
-    "type"      => KwType,
-    "typeof"    => KwTypeof,
-    "unsafe"    => KwUnsafe,
-    "unsized"   => KwUnsized,
-    "use"       => KwUse,
-    "virtual"   => KwVirtual,
-    "where"     => KwWhere,
-    "while"     => KwWhile,
-    "yield"     => KwYield,
-};
 
 // Macros
 // Something separated by `D`. Tail `D` is acceptable.
@@ -271,37 +166,6 @@ tuple_of_delim_notail<T, D>: Vec<T> =
         v
     };
 tuple_of_notail<T>: Vec<T> = tuple_of_delim_notail<T, ",">;
-
-// Token tree
-pub tts: Vec<Token<'input>> = tt*;
-
-pub tt: Token<'input> = {
-    "(" <tts> ")"   => Token::Delimited(Delimiter::Paren, <>),
-    "[" <tts> "]"   => Token::Delimited(Delimiter::Bracket, <>),
-    "{" <tts> "}"   => Token::Delimited(Delimiter::Brace, <>),
-    keyword         => Token::Keyword(<>),
-    IDENT           => Token::Ident(<>),
-    LIFETIME        => Token::Lifetime(<>),
-    symbol          => Token::Symbol(<>),
-    LITERAL         => Token::Literal(<>),
-    INNERDOC        => Token::InnerDoc(<>),
-    OUTERDOC        => Token::OuterDoc(<>),
-};
-
-// Plugin & Macro
-#[inline]
-macro_def: ItemKind<'input> =
-    "macro_rules" "!" <name: LEXIDENT> <tts: tts_like_item>
-        => ItemKind::MacroDef{ name, tts };
-tts_like_item: Vec<Token<'input>> = {
-    "(" <tts> ")" ";",
-    "[" <tts> "]" ";",
-    "{" <tts> "}",
-};
-tts_like_expr: Vec<Token<'input>> = {
-    "(" <tts> ")",
-    "[" <tts> "]",
-};
 
 // Attributes
 inner_attr: Attr<'input> = {
@@ -348,7 +212,13 @@ pub module: ModInner<'input> =
     <attrs: inner_attr*> <items: item*> => ModInner{ attrs, items };
 
 // Item
-pub item: Item<'input> =
+pub item: Item<'input> = {
+    <item_inside>
+        => <>,
+    <attrs: outer_attr*> <pub_tag: "pub"?> <inv: PLUGININVOKE_EXPR>
+        => Item{ is_pub: pub_tag.is_some(), attrs, detail: ItemKind::PluginInvoke(inv) },
+};
+item_inside: Item<'input> = // The item which never be expression-like plugin invocation.
     <attrs: outer_attr*> <pub_tag: "pub"?> <detail: item_detail>
         => Item{ is_pub: pub_tag.is_some(), attrs, detail };
 item_detail: ItemKind<'input> = {
@@ -371,34 +241,29 @@ item_detail: ItemKind<'input> = {
         => ItemKind::Func{ sig, body },
     "extern" <abi: IDENT?> "{" <decls: extern_decl*> "}"
         => ItemKind::Extern{ abi, decls },
-    "type" <alias: IDENT> <opt_templ: template> <whs: where_clause> "=" <origin: ty> ";"
-        => ItemKind::Type{ alias, templ: merge_templ(opt_templ, whs), origin },
-    "struct" <name: IDENT> <opt_templ: template> <whs: where_clause> ";"
-        => ItemKind::StructUnit{ name, templ: merge_templ(opt_templ, whs) },
+    "type" <alias: IDENT> <templ: templ_whs> "=" <origin: ty> ";"
+        => ItemKind::Type{ alias, templ, origin },
+    "struct" <name: IDENT> <templ: templ_whs> ";"
+        => ItemKind::StructUnit{ name, templ },
     "struct" <name: IDENT> <opt_templ: template> "(" <elems: tuple_of<struct_tuple_elem>> ")"
              <whs: where_clause> ";"
         => ItemKind::StructTuple{ name, templ: merge_templ(opt_templ, whs), elems },
-    "struct" <name: IDENT> <opt_templ: template> <whs: where_clause>
-             "{" <fields: tuple_of<struct_field>> "}"
-        => ItemKind::StructNormal{ name, templ: merge_templ(opt_templ, whs), fields },
-    "enum" <name: IDENT> <opt_templ: template> <whs: where_clause>
-           "{" <vars: tuple_of<enum_var>> "}"
-        => ItemKind::Enum{ name, templ: merge_templ(opt_templ, whs), vars },
+    "struct" <name: IDENT> <templ: templ_whs> "{" <fields: tuple_of<struct_field>> "}"
+        => ItemKind::StructNormal{ name, templ, fields },
+    "enum" <name: IDENT> <templ: templ_whs> "{" <vars: tuple_of<enum_var>> "}"
+        => ItemKind::Enum{ name, templ, vars },
     // TODO: const
     // TODO: static
-    "trait" <name: IDENT> <opt_templ: template> <whs: where_clause>
-            "{" <items: trait_item*> "}"
-        => ItemKind::Trait{ name, templ: merge_templ(opt_templ, whs), items },
+    "trait" <name: IDENT> <templ: templ_whs> "{" <items: trait_item*> "}"
+        => ItemKind::Trait{ name, templ, items },
     "impl" <opt_templ: template> <ty_for: ty> <whs: where_clause>
            "{" <items: impl_item*> "}"
         => ItemKind::ImplType{ templ: merge_templ(opt_templ, whs), ty_for, items },
     "impl" <opt_templ: template> <tr_name: trait_name> "for" <ty_for: ty> <whs: where_clause>
            "{" <items: impl_item*> "}"
         => ItemKind::ImplTrait{ templ: merge_templ(opt_templ, whs), tr_name, ty_for, items },
-    <macro_def>
-        => <>,
-    <name: LEXIDENT> "!" <tts: tts_like_item>
-        => ItemKind::PluginInvoke{ name, tts }
+    <PLUGININVOKE_ITEM>
+        => ItemKind::PluginInvoke(<>),
 };
 use_comp: PathComp<'input> = {
     "self" "::"
@@ -428,7 +293,6 @@ struct_tuple_elem: StructTupleElem<'input> =
 struct_field: StructField<'input> =
     <attrs: outer_attr*> <pub_tag: "pub"?> <name: IDENT> ":" <ty: ty>
         => StructField{ name, is_pub: pub_tag.is_some(), attrs, ty };
-#[inline]
 enum_var: EnumVar<'input> = {
     <attrs: outer_attr*> <name: IDENT>
         => EnumVar::Unit{ name, attrs },
@@ -437,7 +301,6 @@ enum_var: EnumVar<'input> = {
     <attrs: outer_attr*> <name: IDENT> "{" <fields: tuple_of<struct_field>> "}"
         => EnumVar::Struct{ name, attrs, fields },
 };
-#[inline]
 trait_item: TraitItem<'input> = {
     <attrs: outer_attr*> "type" <tyb: ty_opt_trait_bound> <default: ("=" <ty>)?> ";"
         => TraitItem::Type{ name: tyb.0, attrs, trait_bounds: (tyb.1).1, default },
@@ -446,7 +309,6 @@ trait_item: TraitItem<'input> = {
     <attrs: outer_attr*> "fn" <sig: fn_sig> <body: fn_body>
         => TraitItem::Func{ sig, attrs, default: Some(body) },
 };
-#[inline]
 impl_item: ImplItem<'input> = {
     <attrs: outer_attr*> "type" <name: IDENT> "=" <val: ty> ";"
         => ImplItem::Type{ name, attrs, val },
@@ -455,7 +317,9 @@ impl_item: ImplItem<'input> = {
 };
 
 // Template & Where clause
-#[inline]
+templ_whs: Template<'input> =
+    <opt_templ: template> <whs: where_clause>
+        => merge_templ(opt_templ, whs);
 template: Template<'input> = {
         => Template{ lifetimes: vec![], tys: vec![], trait_bounds: vec![] },
     "<" <tuple_of<LIFETIME>> close_templ
@@ -475,7 +339,6 @@ ty_opt_trait_bound: (&'input str, TraitBound<'input>) =
 trait_bound: TraitBound<'input> =
     <ty> ":" <tuple_of_delim<trait_name, "+">>
         => TraitBound(<>);
-#[inline]
 where_clause: Vec<TraitBound<'input>> =
     <("where" <tuple_of<trait_bound>>)?>
         => <>.unwrap_or(vec![]);
@@ -521,7 +384,6 @@ fn_sig: FuncSig<'input> =
             args,
             ret: ret.unwrap_or(Ty::Tuple(vec![])),
         };
-#[inline]
 fn_self: SelfArg = {
         => SelfArg::Static,
     "&" <mut_tag: "mut"?> "self"
@@ -530,13 +392,13 @@ fn_self: SelfArg = {
         => SelfArg::Consume{ is_mut: mut_tag.is_some() },
 };
 fn_body: FuncBody<'input> =
-    "{" <tts> "}";
+    <block_expr>;
 fn_arg: FuncArg<'input> = // TODO: pattern matching for arguments
     <name: IDENT> ":" <ty: ty>
         => FuncArg{ name, ty };
 
 // Pattern
-pat: Pat<'input> = {
+pub pat: Pat<'input> = {
     <var: QIDENT>
         => if is_placeholder(&var) { Pat::Hole } else { Pat::Var(var) },
     <LITERAL>
@@ -551,8 +413,10 @@ pat: Pat<'input> = {
         => Pat::DestructNormal{ name, fields, ellipsis: false },
     <name: QIDENT> "{" <fields: (<struct_pat_field> ",")*> ".." "}"
         => Pat::DestructNormal{ name, fields, ellipsis: true },
-    <name: LEXIDENT> "!" <tts: tts_like_expr>
-        => Pat::PluginInvoke{ name, tts },
+    <PLUGININVOKE_ITEM>
+        => Pat::PluginInvoke(<>),
+    <PLUGININVOKE_EXPR>
+        => Pat::PluginInvoke(<>),
 };
 match_arm: MatchArm<'input> =
     <pats: tuple_of_delim<pat, "|">> "=>" <expr: expr>
@@ -568,11 +432,9 @@ struct_pat_field: (&'input str, Pat<'input>) = {
 };
 
 // Expression
-expr: Expr<'input> = {
+pub expr: Expr<'input> = {
     <LITERAL>
         => Expr::Literal(<>),
-    <QIDENT>
-        => Expr::Path(<>),
     "(" <expr> ")"
         => <>,
     "(" <must_tuple_of<expr>> ")"
@@ -601,11 +463,11 @@ expr: Expr<'input> = {
         => Expr::Continue(opt_lt),
     "while" <cond: expr> <body: block_expr>
         => Expr::While{ cond: Box::new(cond), body: Box::new(body) },
-    "for" <iter: pat> <itee: expr> <body: block_expr>
+    "for" <iter: pat> "in" <itee: expr> <body: block_expr>
         => Expr::For{ iter, itee: Box::new(itee), body: Box::new(body) },
     "if" <cond: expr> <do_expr: block_expr> <else_expr: else_expr>
         => Expr::If{ cond: Box::new(cond), do_expr: Box::new(do_expr), else_expr },
-    "match" <expr: expr> <arms: match_arm*>
+    "match" <expr: expr> "{" <arms: match_arm*> "}"
         => Expr::Match{ expr: Box::new(expr), arms },
     "if" "let" <pat: pat> "=" <cond: expr> <do_expr: block_expr> <else_expr: else_expr>
         => Expr::IfLet{ pat, cond: Box::new(cond), do_expr: Box::new(do_expr), else_expr },
@@ -613,8 +475,8 @@ expr: Expr<'input> = {
         => Expr::WhileLet{ pat, cond: Box::new(cond), body: Box::new(body) },
     "return"
         => Expr::Return,
-    <name: LEXIDENT> "!" <tts: tts_like_expr>
-        => Expr::PluginInvoke{ name, tts },
+    <PLUGININVOKE_EXPR>
+        => Expr::PluginInvoke(<>),
 };
 struct_expr_field: (&'input str, Expr<'input>) = {
     <name: IDENT>
@@ -636,7 +498,7 @@ block_expr: Expr<'input> =
     "{" <stmts: block_item*> <ret: expr?> "}"
         => Expr::Block{ stmts, ret: ret.map(Box::new) };
 block_item: Stmt<'input> = {
-    <item>
+    <item_inside>
         => Stmt::Item(<>),
     "let" <pat: pat> <ty: (":" <ty>)?> "=" <expr: expr> ";"
         => Stmt::Let{ pat, ty, expr },
