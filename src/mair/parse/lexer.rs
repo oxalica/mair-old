@@ -317,7 +317,7 @@ impl<'a> Iterator for EscapedChars<'a> {
                             self.0 = self.0.trim_left();
                             continue
                         },
-                        c@_ if br#"\\'"nrt0"#.contains(&c) => c as char,
+                        c if br#"\\'"nrt0"#.contains(&c) => c as char,
                         _     => return err,
                     }
                 } else if let Some(s) = cap.name("char_escape_ascii") {
