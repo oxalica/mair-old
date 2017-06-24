@@ -236,7 +236,7 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
     IfLet       { pat: Pat<'a>, cond: Box<Expr<'a>>,
                   do_expr: Box<Expr<'a>>, else_expr: Option<Box<Expr<'a>>> },
     WhileLet    { pat: Pat<'a>, cond: Box<Expr<'a>>, body: Box<Expr<'a>> },
-    Return,
+    Return      { expr: Option<Box<Expr<'a>>> },
     PluginInvoke(PluginInvoke<'a>),
 }
 

@@ -473,8 +473,8 @@ pub expr: Expr<'input> = {
         => Expr::IfLet{ pat, cond: Box::new(cond), do_expr: Box::new(do_expr), else_expr },
     "while" "let" <pat: pat> "=" <cond: expr> <body: block_expr>
         => Expr::WhileLet{ pat, cond: Box::new(cond), body: Box::new(body) },
-    "return"
-        => Expr::Return,
+    "return" <expr: expr?>
+        => Expr::Return{ expr: expr.map(Box::new) },
     <PLUGININVOKE_EXPR>
         => Expr::PluginInvoke(<>),
 };
