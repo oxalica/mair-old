@@ -1,3 +1,5 @@
+#![cfg_attr(feature="clippy", allow(never_loop))] // TODO: https://github.com/Manishearth/rust-clippy/issues/1586
+
 use std::ops::Range;
 use std::iter::Peekable;
 use std::collections::HashMap;
