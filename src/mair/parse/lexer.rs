@@ -27,10 +27,6 @@ pub enum LexToken<'input> {
     Literal(Lit<'input>),
     /// A symbol.
     Symbol(LexSymbol),
-    /// The ambiguous symbol `>` followed by `>` or `=`. eg. `>>` will be parsed into
-    /// an `AmbigGt` and a normal `Symbol`, for that the first `>` can be either the end of
-    /// template or a bitwise right shift operator when combining the following `>`.
-    AmbigGt,
     /// A plugin(including macro) invocation using delimiter `{}` (Item-like).
     PluginInvokeItem(PluginInvoke<'input>),
     /// A plugin(including macro) invocation using delimiter `()` or `[]` (Expression-like).
@@ -147,7 +143,7 @@ define_symbols!{
     Or          = "|";
     Xor         = "^";
     Shl         = "<<";
-    // Shr         = ">>"; `Vec<Vec<_>>`
+    Shr         = ">>";
     AndAnd      = "&&";
     OrOr        = "||";
     EqEq        = "==";
@@ -155,7 +151,7 @@ define_symbols!{
     Lt          = "<";
     Gt          = ">";
     Le          = "<=";
-    // Ge          = ">="; `let _: Vec<_>=_;`
+    Ge          = ">=";
     Eq          = "=";
     AddEq       = "+=";
     SubEq       = "-=";
@@ -166,14 +162,8 @@ define_symbols!{
     OrEq        = "|=";
     XorEq       = "^=";
     ShlEq       = "<<=";
-    // ShrEq       = ">>="; `let _: Vec<Vec<_>>=_;`
+    ShrEq       = ">>=";
 } // define_symbols!
-
-lazy_static! {
-    static ref RE_AMBIG_NEXT: Regex = Regex::new(
-        r"\A(?:>|=)"
-    ).unwrap();
-}
 
 define_keywords! {
     // https://doc.rust-lang.org/grammar.html#keywords
@@ -509,14 +499,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                         self.eat_block_comment()?;
                         None
                     },
-                    m if is("symbol")               => {
-                        let tokty = SYMBOLS[m];
-                        if tokty == LexSymbol::Gt && RE_AMBIG_NEXT.is_match(self.rest) {
-                            Some(AmbigGt)
-                        } else {
-                            Some(Symbol(tokty))
-                        }
-                    },
+                    m if is("symbol")               => Some(Symbol(SYMBOLS[m])),
                     _ => unreachable!(),
                 })
             };
@@ -828,9 +811,6 @@ mod test {
         }
         println!("testing: `{}`", source);
         assert_eq!(lex(&source),    Ok(expect));
-        assert_eq!(lex(">"),        Ok(vec![(Symbol(Gt), 0..1)]));
-        assert_eq!(lex("> "),       Ok(vec![(Symbol(Gt), 0..1)]));
-        assert_eq!(lex(">>"),       Ok(vec![(AmbigGt, 0..1), (Symbol(Gt), 1..2)]));
     }
 
     #[test]
