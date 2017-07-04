@@ -1,5 +1,5 @@
 use std::cmp::Eq;
-use super::lexer::{LexToken, Loc};
+use super::lexer::LexToken;
 use super::{imax, fmax};
 
 /// A module, or a crate, as well as a rust source file.
@@ -283,10 +283,17 @@ pub enum Delimiter {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct PluginInvoke<'a> {
     pub name:  &'a str,
-    pub delim: Delimiter,
     pub ident: Option<&'a str>,
-    pub tts:   Vec<(LexToken<'a>, Loc)>,
+    pub tt:    TT<'a>, // must be TokenTree::Tree
 }
+
+/// A token tree.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TT<'a> {
+    Token(LexToken<'a>),
+    Tree(Delimiter, Vec<TT<'a>>),
+}
+
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum UnaryOp {

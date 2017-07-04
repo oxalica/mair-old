@@ -1,15 +1,15 @@
 #![cfg_attr(feature="clippy", allow(never_loop))] // TODO: https://github.com/Manishearth/rust-clippy/issues/1586
 
 use std::ops::Range;
-use std::iter::Peekable;
 use std::collections::HashMap;
 use std::char::from_u32;
 use regex::{Regex, Captures, escape};
 use super::{imax, fmax, str_ptr_diff};
-use super::ast::{Literal as Lit, Ty, PluginInvoke, Delimiter};
+use super::ast::{Literal as Lit, Ty};
 
 pub type Pos = usize;
 pub type Loc = Range<Pos>;
+pub type LocatedToken<'a> = (LexToken<'a>, Loc);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum LexToken<'input> {
@@ -27,10 +27,6 @@ pub enum LexToken<'input> {
     Literal(Lit<'input>),
     /// A symbol.
     Symbol(LexSymbol),
-    /// A plugin(including macro) invocation using delimiter `{}` (Item-like).
-    PluginInvokeItem(PluginInvoke<'input>),
-    /// A plugin(including macro) invocation using delimiter `()` or `[]` (Expression-like).
-    PluginInvokeExpr(PluginInvoke<'input>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -46,8 +42,6 @@ pub enum LexicalErrorKind {
     UnterminatedString,
     InvalidNumberSuffix,
     InvalidEscape,
-    InvalidPluginInvoke,
-    UnmatchedPluginInvokeDelim,
 }
 
 /// An iterator over escaped `&str` producing unescaped chars
@@ -58,15 +52,11 @@ struct Tokenizer<'input> {
     rest: &'input str,
 }
 
-/// An basic iterator,
-struct RawLexer<'input> {
+/// An iterator over `str` producing `LexToken`.
+pub struct Lexer<'input> {
     source: &'input str,
     tokenizer: Tokenizer<'input>,
 }
-
-/// An iterator over `str` whose output is compatible with the lalrpop parser.
-/// It will process plugin invocations.
-pub struct Lexer<'input>(Peekable<RawLexer<'input>>);
 
 macro_rules! define_symbols(
     ($($tok:ident = $s:expr;)+) => {
@@ -514,9 +504,9 @@ impl<'input> Iterator for Tokenizer<'input> {
     }
 }
 
-impl<'input> RawLexer<'input> {
+impl<'input> Lexer<'input> {
     pub fn new(input: &'input str) -> Self {
-        RawLexer{ source: input, tokenizer: Tokenizer::new(input) }
+        Lexer{ source: input, tokenizer: Tokenizer::new(input) }
     }
 
     /// Get the start and end index of a subslice of `source`.
@@ -528,8 +518,8 @@ impl<'input> RawLexer<'input> {
     }
 }
 
-impl<'input> Iterator for RawLexer<'input> {
-    type Item = Result<(LexToken<'input>, Loc), LexicalError<usize>>;
+impl<'input> Iterator for Lexer<'input> {
+    type Item = Result<LocatedToken<'input>, LexicalError<usize>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -544,104 +534,11 @@ impl<'input> Iterator for RawLexer<'input> {
     }
 }
 
-impl<'input> Lexer<'input> {
-    pub fn new(input: &'input str) -> Self {
-        Lexer(RawLexer::new(input).peekable())
-    }
-
-    /// Process the plugin arguments, which are an optional identifier and a block.
-    /// `name` is the plugin name to invoke. `begin_pos` is for the InvalidPluginInvoke error.
-    fn plugin_invoke_args(&mut self, name: &'input str, begin_pos: usize)
-            -> Result<(PluginInvoke<'input>, Loc), LexicalError<usize>> {
-        use self::LexicalErrorKind::*;
-        use self::LexSymbol::*;
-        use self::Delimiter::*;
-
-        let lex = &mut self.0;
-        let err_invoke = Err(LexicalError{ pos: begin_pos, kind: InvalidPluginInvoke });
-        let err_unmatch = |pos| Err(LexicalError{ pos, kind: UnmatchedPluginInvokeDelim });
-        let delim_ty = |sym| match sym {
-            LParen | RParen     => Paren,
-            LBracket | RBracket => Bracket,
-            LBrace | RBrace     => Brace,
-            _                   => unreachable!(),
-        };
-        let ident = match lex.peek() {
-            Some(&Ok((LexToken::Ident(c), _))) => { lex.next(); Some(c) },
-            _                                  => None,
-        };
-        let delim;
-        let mut delims = vec![];
-        match lex.next() {
-            Some(Ok((LexToken::Symbol(sym), loc))) => match sym {
-                LParen | LBracket | LBrace => {
-                    delim = delim_ty(sym);
-                    delims.push((loc.start, delim));
-                },
-                _                          =>
-                    return err_invoke,
-            },
-            Some(Err(e)) => return Err(e),
-            _            => return err_invoke,
-        }
-        let mut tts = vec![];
-        let end_pos;
-        loop {
-            match lex.next() {
-                Some(Ok((LexToken::Symbol(sym), loc))) => {
-                    match sym {
-                        LParen | LBracket | LBrace => delims.push((loc.start, delim_ty(sym))),
-                        RParen | RBracket | RBrace => match delims.pop() {
-                            None              => return err_unmatch(loc.start),
-                            Some((_, expect)) => if expect != delim_ty(sym) {
-                                return err_unmatch(loc.start);
-                            } else if delims.is_empty() {
-                                end_pos = loc.end;
-                                break;
-                            },
-                        },
-                        _                          => (),
-                    }
-                    tts.push((LexToken::Symbol(sym), loc));
-                },
-                Some(Ok((tok, loc)))                   => tts.push((tok, loc)),
-                Some(Err(e))                           => return Err(e),
-                None                                   => return err_unmatch(delims.last().unwrap().0),
-            }
-        }
-        Ok((PluginInvoke{ name, delim, ident, tts }, begin_pos..end_pos))
-    }
-}
-
-impl<'input> Iterator for Lexer<'input> {
-    type Item = Result<(LexToken<'input>, Loc), LexicalError<usize>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        use self::LexToken::*;
-
-        match (self.0.next(), self.0.peek()) {
-            (Some(Ok((Ident(name), loc))), Some(&Ok((Symbol(LexSymbol::Bang), _)))) => {
-                self.0.next(); // eat `!`
-                match self.plugin_invoke_args(name, loc.start) {
-                    Err(e)          => Some(Err(e)),
-                    Ok((inv, loc))  => Some(Ok(if inv.delim == Delimiter::Brace {
-                        (PluginInvokeItem(inv), loc)
-                    } else {
-                        (PluginInvokeExpr(inv), loc)
-                    })),
-                }
-            },
-            (c, _) => c,
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
     use super::LexToken::*;
     use super::KeywordType::*;
-    use super::LexSymbol::*;
     use super::LexicalErrorKind::*;
 
     fn lex(input: &str) -> Result<Vec<(LexToken, Loc)>, LexicalError<usize>> {
@@ -678,39 +575,6 @@ mod test {
         assert_eq!(unesc(r"\x0"),               Err(r"\x0"));
         assert_eq!(unesc(r"\x0*"),              Err(r"\x0*"));
         assert_eq!(unesc(r"\u{999999}"),        Err(r"\u{999999}"));
-    }
-
-    #[test]
-    fn lexer_plugin_invoke() {
-        use self::Delimiter::*;
-
-        let ok_expr = |p: Loc, name, delim, ident, tts|
-            Ok(vec![(PluginInvokeExpr(PluginInvoke{ name, delim, ident, tts }), p)]);
-        let ok_item = |p: Loc, name, delim, ident, tts|
-            Ok(vec![(PluginInvokeItem(PluginInvoke{ name, delim, ident, tts }), p)]);
-        assert_eq!(lex("a!()"),  ok_expr(0..4, "a", Paren,   None, vec![] ));
-        assert_eq!(lex("a![]"),  ok_expr(0..4, "a", Bracket, None, vec![] ));
-        assert_eq!(lex("a!{}"),  ok_item(0..4, "a", Brace,   None, vec![] ));
-        assert_eq!(lex("a!a{}"), ok_item(0..5, "a", Brace,   Some("a"), vec![] ));
-
-        let ok2 = |p, v| ok_item(p, "a", Brace, None, v);
-        assert_eq!(lex("a!{a}"), ok2(0..5, vec![(Ident("a"), 3..4)] ));
-        assert_eq!(lex("a!{a[]}"), ok2(0..7, vec![
-            (Ident("a"), 3..4), (Symbol(LBracket), 4..5), (Symbol(RBracket), 5..6)
-        ]));
-        assert_eq!(lex("a!{a[b(c)d{e}f]}"), ok2(0..16, vec![
-            (Ident("a"), 3..4),   (Symbol(LBracket), 4..5),
-            (Ident("b"), 5..6),   (Symbol(LParen),   6..7),
-            (Ident("c"), 7..8),   (Symbol(RParen),   8..9),
-            (Ident("d"), 9..10),  (Symbol(LBrace),   10..11),
-            (Ident("e"), 11..12), (Symbol(RBrace),   12..13),
-            (Ident("f"), 13..14), (Symbol(RBracket), 14..15),
-        ]));
-
-        assert_eq!(lex("a!"),  Err(LexicalError{ pos: 0, kind: InvalidPluginInvoke }));
-        assert_eq!(lex("a!b"), Err(LexicalError{ pos: 0, kind: InvalidPluginInvoke }));
-        assert_eq!(lex("a!("), Err(LexicalError{ pos: 2, kind: UnmatchedPluginInvokeDelim }));
-        assert_eq!(lex("a!a[)"), Err(LexicalError{ pos: 4, kind: UnmatchedPluginInvokeDelim }));
     }
 
     #[test]
