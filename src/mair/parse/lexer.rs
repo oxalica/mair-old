@@ -535,13 +535,13 @@ impl<'input> Iterator for Lexer<'input> {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test { // pub for reuse
     use super::*;
     use super::LexToken::*;
     use super::KeywordType::*;
     use super::LexicalErrorKind::*;
 
-    fn lex(input: &str) -> Result<Vec<(LexToken, Loc)>, LexicalError<usize>> {
+    pub fn lex(input: &str) -> Result<Vec<(LexToken, Loc)>, LexicalError<usize>> {
         let mut v = vec![];
         for c in Lexer::new(input) {
             v.push(c?);
