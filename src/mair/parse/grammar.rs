@@ -1,11 +1,11 @@
-use super::lexer::{Loc, LexToken as Tok, LocatedToken, LexSymbol as Sym};
+use super::lexer::{Loc, TokenKind as Tokk, Token, LexSymbol as Sym};
 use super::ast::{Delimiter, TT, TTKind};
 
 /// The only error may be thrown by `TTParser::next()`.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct UnmatchedDelimError(Loc);
 
-/// An iterator over `LocatedToken`s producing `TT`s
+/// An iterator over `Token`s producing `TT`s
 pub struct TTParser<I>(I);
 
 enum NextTTResult<'a> {
@@ -16,7 +16,7 @@ enum NextTTResult<'a> {
 }
 
 impl<'a, I> TTParser<I>
-        where I: Iterator<Item=LocatedToken<'a>> {
+        where I: Iterator<Item=Token<'a>> {
     pub fn new<T>(tokens: T) -> TTParser<I>
             where T: IntoIterator<IntoIter=I, Item=I::Item> {
         TTParser(tokens.into_iter())
@@ -29,17 +29,17 @@ impl<'a, I> TTParser<I>
         use self::Sym::*;
 
         let (delim, close_delim, begin_pos) = match self.0.next() {
-            None                          => return Ret::None,
-            Some((Tok::Symbol(sym), loc)) => match sym {
+            None                           => return Ret::None,
+            Some((Tokk::Symbol(sym), loc)) => match sym {
                 LParen   => (Paren,   RParen,   loc.start),
                 LBracket => (Bracket, RBracket, loc.start),
                 LBrace   => (Brace,   RBrace,   loc.start),
                 c@RParen   |
                 c@RBracket |
                 c@RBrace => return Ret::CloseDelim(c, loc),
-                _        => return Ret::TT((TTKind::Token(Tok::Symbol(sym)), loc)),
+                _        => return Ret::TT((TTKind::Token(Tokk::Symbol(sym)), loc)),
             },
-            Some((tokk, loc))             => return Ret::TT((TTKind::Token(tokk), loc)),
+            Some((tokk, loc))              => return Ret::TT((TTKind::Token(tokk), loc)),
         };
         let end_pos;
         let mut tts = vec![];
@@ -61,7 +61,7 @@ impl<'a, I> TTParser<I>
 }
 
 impl<'a, I> Iterator for TTParser<I>
-        where I: Iterator<Item=LocatedToken<'a>> {
+        where I: Iterator<Item=Token<'a>> {
     type Item = Result<TT<'a>, UnmatchedDelimError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -92,7 +92,7 @@ mod test {
 
     #[test]
     fn tt_parser_test() {
-        let star = |loc| (TTKind::Token(Tok::Symbol(Sym::Mul)), loc);
+        let star = |loc| (TTKind::Token(Tokk::Symbol(Sym::Mul)), loc);
         let tree = |delim, tts, loc| (TTKind::Tree{ delim, tts }, loc);
         assert_eq!(parse_tt(" "), Ok(vec![]));
         assert_eq!(parse_tt("*(* {*}[])"), Ok(vec![

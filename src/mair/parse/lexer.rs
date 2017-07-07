@@ -9,10 +9,10 @@ use super::ast::{Literal as Lit, Ty};
 
 pub type Pos = usize;
 pub type Loc = Range<Pos>;
-pub type LocatedToken<'a> = (LexToken<'a>, Loc);
+pub type Token<'a> = (TokenKind<'a>, Loc);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum LexToken<'input> {
+pub enum TokenKind<'input> {
     /// An inner document containing the content.
     InnerDoc(&'input str),
     /// An outer document containing the content.
@@ -47,12 +47,12 @@ pub enum LexicalErrorKind {
 /// An iterator over escaped `&str` producing unescaped chars
 struct EscapedChars<'a>(&'a str);
 
-/// An iterator over `str` producing `Some(LexToken)` for token or `None` for comment.
+/// An iterator over `str` producing `Some(TokenKind)` for token or `None` for comment.
 struct Tokenizer<'input> {
     rest: &'input str,
 }
 
-/// An iterator over `str` producing `LexToken`.
+/// An iterator over `str` producing `TokenKind`.
 pub struct Lexer<'input> {
     source: &'input str,
     tokenizer: Tokenizer<'input>,
@@ -444,10 +444,10 @@ fn parse_str_string(source: &str, is_bytestr: bool, is_raw: bool)
 }
 
 impl<'input> Iterator for Tokenizer<'input> {
-    type Item = Result<Option<(LexToken<'input>, &'input str)>, LexicalError<&'input str>>;
+    type Item = Result<Option<(TokenKind<'input>, &'input str)>, LexicalError<&'input str>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        use self::LexToken::*;
+        use self::TokenKind::*;
         use self::LexicalErrorKind::*;
 
         let slast = self.rest.trim_left();
@@ -519,7 +519,7 @@ impl<'input> Lexer<'input> {
 }
 
 impl<'input> Iterator for Lexer<'input> {
-    type Item = Result<LocatedToken<'input>, LexicalError<usize>>;
+    type Item = Result<Token<'input>, LexicalError<usize>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -537,11 +537,11 @@ impl<'input> Iterator for Lexer<'input> {
 #[cfg(test)]
 pub mod test { // pub for reuse
     use super::*;
-    use super::LexToken::*;
+    use super::TokenKind::*;
     use super::KeywordType::*;
     use super::LexicalErrorKind::*;
 
-    pub fn lex(input: &str) -> Result<Vec<(LexToken, Loc)>, LexicalError<usize>> {
+    pub fn lex(input: &str) -> Result<Vec<(TokenKind, Loc)>, LexicalError<usize>> {
         let mut v = vec![];
         for c in Lexer::new(input) {
             v.push(c?);

@@ -1,5 +1,5 @@
 use std::cmp::Eq;
-use super::lexer::{Loc, LexToken};
+use super::lexer::{Loc, TokenKind};
 use super::{imax, fmax};
 
 /// A module, or a crate, as well as a rust source file.
@@ -290,7 +290,7 @@ pub struct PluginInvoke<'a> {
 /// A token tree with location.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TTKind<'a> {
-    Token(LexToken<'a>),
+    Token(TokenKind<'a>),
     Tree{ delim: Delimiter, tts: Vec<TT<'a>> },
 }
 
