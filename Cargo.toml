@@ -2,7 +2,6 @@
 name = "mair"
 version = "0.1.0"
 authors = ["uHOOCCOOHu <hooccooh1896@gmail.com>"]
-build = "src/build.rs"
 include = ["Cargo.toml", "src/**/*"]
 
 [lib]
@@ -18,11 +17,9 @@ doc = false
 default = []
 
 [build-dependencies]
-lalrpop = "0.13.0"
 
 [dependencies]
 lazy_static = "0.2.8"
-lalrpop-util = "0.13.0"
 regex = "0.2.1"
 
 [dependencies.clippy]

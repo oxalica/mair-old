@@ -1,5 +1,5 @@
 use std::cmp::Eq;
-use super::lexer::{LexToken, Loc};
+use super::lexer::{Loc, TokenKind};
 use super::{imax, fmax};
 
 /// A module, or a crate, as well as a rust source file.
@@ -236,7 +236,7 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
     IfLet       { pat: Pat<'a>, cond: Box<Expr<'a>>,
                   do_expr: Box<Expr<'a>>, else_expr: Option<Box<Expr<'a>>> },
     WhileLet    { pat: Pat<'a>, cond: Box<Expr<'a>>, body: Box<Expr<'a>> },
-    Return,
+    Return      { expr: Option<Box<Expr<'a>>> },
     PluginInvoke(PluginInvoke<'a>),
 }
 
@@ -283,10 +283,18 @@ pub enum Delimiter {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct PluginInvoke<'a> {
     pub name:  &'a str,
-    pub delim: Delimiter,
     pub ident: Option<&'a str>,
-    pub tts:   Vec<(LexToken<'a>, Loc)>,
+    pub tt:    TT<'a>, // must be TokenTree::Tree
 }
+
+/// A token tree with location.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TTKind<'a> {
+    Token(TokenKind<'a>),
+    Tree{ delim: Delimiter, tts: Vec<TT<'a>> },
+}
+
+pub type TT<'a> = (TTKind<'a>, Loc);
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum UnaryOp {
