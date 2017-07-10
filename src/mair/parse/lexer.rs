@@ -6,6 +6,7 @@ use std::char::from_u32;
 use regex::{Regex, Captures, escape};
 use super::{imax, fmax, str_ptr_diff};
 use super::ast::{Literal as Lit, Ty};
+use super::error::{LexicalError, LexicalErrorKind};
 
 pub type Pos = usize;
 pub type Loc = Range<Pos>;
@@ -27,21 +28,6 @@ pub enum TokenKind<'input> {
     Literal(Lit<'input>),
     /// A symbol.
     Symbol(LexSymbol),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct LexicalError<P> {
-    pub pos:  P,
-    pub kind: LexicalErrorKind,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum LexicalErrorKind {
-    UnknowToken,
-    UnclosedComment,
-    UnterminatedString,
-    InvalidNumberSuffix,
-    InvalidEscape,
 }
 
 /// An iterator over escaped `&str` producing unescaped chars

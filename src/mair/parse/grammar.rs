@@ -1,9 +1,6 @@
 use super::lexer::{Loc, TokenKind as Tokk, Token, LexSymbol as Sym};
 use super::ast::{Delimiter, TT, TTKind};
-
-/// The only error may be thrown by `TTParser::next()`.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct UnmatchedDelimError(Loc);
+use super::error::UnmatchedDelimError;
 
 /// An iterator over `Token`s producing `TT`s
 pub struct TTParser<I>(I);
