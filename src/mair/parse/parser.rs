@@ -64,7 +64,7 @@ fn parse_tts_helper<'a, 'b>(mut toks: &'b [Token<'a>])
 mod test {
     use super::*;
     use super::super::lexer::test::lex;
-    use super::super::lexer::LexSymbol as Sym;
+    use super::super::lexer::SymbolType as Sym;
     use super::super::ast::Delimiter::*;
 
     fn tts(input: &str) -> Result<Vec<TT>, UnmatchedDelimError> {
