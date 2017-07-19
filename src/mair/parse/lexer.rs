@@ -29,7 +29,7 @@ pub enum TokenKind<'input> {
     /// A delimiter.
     Delimiter{ is_open: bool, delim: Delimiter },
     /// A symbol.
-    Symbol(LexSymbol),
+    Symbol(SymbolType),
 }
 
 /// An iterator over escaped `&str` producing unescaped chars
@@ -49,14 +49,14 @@ pub struct Lexer<'input> {
 macro_rules! define_symbols(
     ($($tok:ident = $s:expr;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-        pub enum LexSymbol {
+        pub enum SymbolType {
             $($tok,)+
         }
 
         lazy_static! {
-            static ref SYMBOLS: HashMap<&'static str, LexSymbol> = {
+            static ref SYMBOLS: HashMap<&'static str, SymbolType> = {
                 let mut m = HashMap::new();
-                $(m.insert($s, LexSymbol::$tok);)+
+                $(m.insert($s, SymbolType::$tok);)+
                 m
             };
             static ref RESTR_SYMBOLS: String = {
@@ -139,58 +139,58 @@ define_symbols!{
 
 define_keywords! {
     // https://doc.rust-lang.org/grammar.html#keywords
-    KwAbstract  = "abstract";
-    KwAlignof   = "alignof";
-    KwAs        = "as";
-    KwBecome    = "become";
-    KwBox       = "box";
-    KwBreak     = "break";
-    KwConst     = "const";
-    KwContinue  = "continue";
-    KwCrate     = "crate";
-    KwDo        = "do";
-    KwElse      = "else";
-    KwEnum      = "enum";
-    KwExtern    = "extern";
-    KwFalse     = "false";
-    KwFinal     = "final";
-    KwFn        = "fn";
-    KwFor       = "for";
-    KwIf        = "if";
-    KwImpl      = "impl";
-    KwIn        = "in";
-    KwLet       = "let";
-    KwLoop      = "loop";
-    KwMacro     = "macro";
-    KwMatch     = "match";
-    KwMod       = "mod";
-    KwMove      = "move";
-    KwMut       = "mut";
-    KwOffsetof  = "offsetof";
-    KwOverride  = "override";
-    KwPriv      = "priv";
-    KwProc      = "proc";
-    KwPub       = "pub";
-    KwPure      = "pure";
-    KwRef       = "ref";
-    KwReturn    = "return";
-    KwSelfTy    = "Self";
-    KwSelfVar   = "self";
-    KwSizeof    = "sizeof";
-    KwStatic    = "static";
-    KwStruct    = "struct";
-    KwSuper     = "super";
-    KwTrait     = "trait";
-    KwTrue      = "true";
-    KwType      = "type";
-    KwTypeof    = "typeof";
-    KwUnsafe    = "unsafe";
-    KwUnsized   = "unsized";
-    KwUse       = "use";
-    KwVirtual   = "virtual";
-    KwWhere     = "where";
-    KwWhile     = "while";
-    KwYield     = "yield";
+    Abstract  = "abstract";
+    Alignof   = "alignof";
+    As        = "as";
+    Become    = "become";
+    Box       = "box";
+    Break     = "break";
+    Const     = "const";
+    Continue  = "continue";
+    Crate     = "crate";
+    Do        = "do";
+    Else      = "else";
+    Enum      = "enum";
+    Extern    = "extern";
+    False     = "false";
+    Final     = "final";
+    Fn        = "fn";
+    For       = "for";
+    If        = "if";
+    Impl      = "impl";
+    In        = "in";
+    Let       = "let";
+    Loop      = "loop";
+    Macro     = "macro";
+    Match     = "match";
+    Mod       = "mod";
+    Move      = "move";
+    Mut       = "mut";
+    Offsetof  = "offsetof";
+    Override  = "override";
+    Priv      = "priv";
+    Proc      = "proc";
+    Pub       = "pub";
+    Pure      = "pure";
+    Ref       = "ref";
+    Return    = "return";
+    SelfTy    = "Self";
+    SelfVar   = "self";
+    Sizeof    = "sizeof";
+    Static    = "static";
+    Struct    = "struct";
+    Super     = "super";
+    Trait     = "trait";
+    True      = "true";
+    Type      = "type";
+    Typeof    = "typeof";
+    Unsafe    = "unsafe";
+    Unsized   = "unsized";
+    Use       = "use";
+    Virtual   = "virtual";
+    Where     = "where";
+    While     = "while";
+    Yield     = "yield";
 } // define_keywords!
 
 /// The regex match a char(maybe escaped).
@@ -534,7 +534,7 @@ impl<'input> Iterator for Lexer<'input> {
 pub mod test { // pub for reuse
     use super::*;
     use super::TokenKind::*;
-    use super::KeywordType::*;
+    use super::KeywordType as Kw;
     use super::LexicalErrorKind::*;
 
     pub fn lex(input: &str) -> Result<Vec<Token>, LexicalError<usize>> {
@@ -577,7 +577,7 @@ pub mod test { // pub for reuse
     fn lexer_keyword_ident() {
         assert_eq!(lex("_"),        Ok(vec![(Ident("_"), 0..1)]));
         assert_eq!(lex("a"),        Ok(vec![(Ident("a"), 0..1)]));
-        assert_eq!(lex("as"),       Ok(vec![(Keyword(KwAs), 0..2)]));
+        assert_eq!(lex("as"),       Ok(vec![(Keyword(Kw::As), 0..2)]));
         assert_eq!(lex("asc"),      Ok(vec![(Ident("asc"), 0..3)]));
         assert_eq!(lex("a0__c_"),   Ok(vec![(Ident("a0__c_"), 0..6)]));
         assert_eq!(lex("_9 a0"),    Ok(vec![(Ident("_9"), 0..2), (Ident("a0"), 3..5)]));
