@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::char::from_u32;
 use regex::{Regex, Captures, escape};
 use super::{imax, fmax, str_ptr_diff};
-use super::ast::{Literal as Lit, Ty};
+use super::ast::{Literal as Lit, Ty, Delimiter};
 use super::error::{LexicalError, LexicalErrorKind};
 
 pub type Pos = usize;
@@ -26,6 +26,8 @@ pub enum TokenKind<'input> {
     Lifetime(&'input str),
     /// A char, string or number literal.
     Literal(Lit<'input>),
+    /// A delimiter.
+    Delimiter{ is_open: bool, delim: Delimiter },
     /// A symbol.
     Symbol(LexSymbol),
 }
@@ -88,12 +90,6 @@ define_symbols!{
     // https://doc.rust-lang.org/grammar.html#symbols
     // https://doc.rust-lang.org/grammar.html#unary-operator-expressions
 
-    LBracket    = "[";
-    RBracket    = "]";
-    LParen      = "(";
-    RParen      = ")";
-    LBrace      = "{";
-    RBrace      = "}";
     Comma       = ",";
     Semi        = ";";
     At          = "@";
@@ -240,6 +236,7 @@ lazy_static! {
         )|
         (?P<char>(?P<char_byte>b)?'(?P<char_content>{chr})')|
         (?P<lifetime>'[A-Za-z_]\w*)|
+        (?P<delimiter>\(|\[|\{{|\}}|\]|\))|
         (?P<symbol>{symbols})|
         (?P<keyword>(?:{keywords})\b)|
         (?P<ident>[A-Za-z_]\w*)
@@ -455,6 +452,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
                     _ if is("char")                 => Some(Literal(parse_cap_char(&cap)?)),
                     _ if is("num")                  => Some(Literal(parse_cap_num(&cap)?)),
+                    m if is("symbol")               => Some(Symbol(SYMBOLS[m])),
                     _ if is("string")               => {
                         if !is("string_closed") {
                             Err(UnterminatedString)?
@@ -475,7 +473,19 @@ impl<'input> Iterator for Tokenizer<'input> {
                         self.eat_block_comment()?;
                         None
                     },
-                    m if is("symbol")               => Some(Symbol(SYMBOLS[m])),
+                    m if is("delimiter")            => {
+                        use self::Delimiter::*;
+                        let is_open = match m {
+                            "(" | "[" | "{" => true,
+                            _               => false,
+                        };
+                        let delim = match m {
+                            "(" | ")" => Paren,
+                            "[" | "]" => Bracket,
+                            _         => Brace,
+                        };
+                        Some(Delimiter{ is_open, delim })
+                    },
                     _ => unreachable!(),
                 })
             };
@@ -527,7 +537,7 @@ pub mod test { // pub for reuse
     use super::KeywordType::*;
     use super::LexicalErrorKind::*;
 
-    pub fn lex(input: &str) -> Result<Vec<(TokenKind, Loc)>, LexicalError<usize>> {
+    pub fn lex(input: &str) -> Result<Vec<Token>, LexicalError<usize>> {
         let mut v = vec![];
         for c in Lexer::new(input) {
             v.push(c?);
@@ -648,6 +658,18 @@ pub mod test { // pub for reuse
 
         assert_eq!(lex("'a 'a"),    Ok(vec![(Lifetime("a"), 0..2), (Lifetime("a"), 3..5)]));
         assert_eq!(lex("'_1a"),     Ok(vec![(Lifetime("_1a"), 0..4)]));
+    }
+
+    #[test]
+    fn lexer_delimiter() {
+        use super::super::ast::Delimiter::*;
+        let delim = |is_open, delim| Ok(vec![(TokenKind::Delimiter{ is_open , delim }, 0..1)]);
+        assert_eq!(lex("("), delim(true , Paren  ));
+        assert_eq!(lex("["), delim(true , Bracket));
+        assert_eq!(lex("{"), delim(true , Brace  ));
+        assert_eq!(lex(")"), delim(false, Paren  ));
+        assert_eq!(lex("]"), delim(false, Bracket));
+        assert_eq!(lex("}"), delim(false, Brace  ));
     }
 
     #[test]
