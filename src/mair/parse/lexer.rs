@@ -47,10 +47,14 @@ pub struct Lexer<'input> {
 }
 
 macro_rules! define_symbols(
-    ($($tok:ident = $s:expr;)+) => {
+    ($($tok:ident = $s:tt;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
         pub enum SymbolType {
             $($tok,)+
+        }
+
+        macro_rules! symbol_type {
+            $(($s) => ($crate::parse::lexer::SymbolType::$tok);)*
         }
 
         lazy_static! {
@@ -69,10 +73,14 @@ macro_rules! define_symbols(
 );
 
 macro_rules! define_keywords {
-    ($($kw:ident = $s:expr;)+) => {
+    ($($kw:ident = $s:tt;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
         pub enum KeywordType {
             $($kw,)+
+        }
+
+        macro_rules! keyword_type {
+            $(($s) => ($crate::parse::lexer::KeywordType::$kw);)*
         }
 
         lazy_static! {

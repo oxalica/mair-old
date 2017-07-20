@@ -1,6 +1,6 @@
 pub mod ast;
 pub mod error;
-pub mod lexer;
+#[macro_use] pub mod lexer; // symbol_type!(), keyword_type!()
 pub mod parser;
 
 /// Integer type with the maximum width supported.
