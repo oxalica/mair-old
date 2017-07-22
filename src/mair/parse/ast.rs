@@ -351,6 +351,18 @@ pub enum Literal<'a> {
 
 pub type Lifetime<'a> = &'a str;
 
+impl<'a> Attr<'a> {
+    pub fn from_doc(doc: &'a str) -> Self {
+        Attr::Value{
+            key: "doc",
+            value: Literal::StrLike{
+                is_bytestr: false,
+                s: doc.to_string(),
+            },
+        }
+    }
+}
+
 impl<'a> Eq for Literal<'a> {} // The float value is never NaN.
 
 impl<'a> Ty<'a> {
