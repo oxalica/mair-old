@@ -2,22 +2,6 @@ use super::lexer::{TokenKind as Tokk, Token};
 use super::ast::{TT, TTKind};
 use super::error::UnmatchedDelimError;
 
-macro_rules! match_slice {
-    ($xs:ident; _ => $e:expr,) => { $e };
-    ($xs:ident; [] => $e:expr, $($t:tt)*) => {{
-        if $xs.is_empty() { $e }
-        else { match_slice!($xs; $($t)*) }
-    }};
-    ($xs:ident; [$p:pat, ..] => $e:expr, $($t:tt)*) => {{
-        if let Some(&$p) = $xs.first() { $e }
-        else { match_slice!($xs; $($t)*) }
-    }};
-    ($xs:ident; [$p:pat, !..] => $e:expr, $($t:tt)*) => {{ // `!` means eating
-        if let Some((&$p, rest)) = $xs.split_first() { $xs = rest; $e }
-        else { match_slice!($xs; $($t)*) }
-    }};
-}
-
 /// Parse tokens into `TT`s.
 pub fn parse_tts<'a>(toks: &[Token<'a>]) -> Result<Vec<TT<'a>>, UnmatchedDelimError> {
     let (rest, tts) = parse_tts_helper(toks)?;
@@ -31,14 +15,16 @@ fn parse_tts_helper<'a, 'b>(mut toks: &'b [Token<'a>])
         -> Result<(&'b [Token<'a>], Vec<TT<'a>>), UnmatchedDelimError> {
     let mut tts = vec![];
     loop {
-        match_slice!{ toks;
-            [] => return Ok((toks, tts)),
-            [(Tokk::Delimiter{ is_open: true, delim }, ref loc), !..] => {
-                let (rest, tts_inner) = parse_tts_helper(toks)?;
+        match toks.first() {
+            None | Some(&(Tokk::Delimiter{ is_open: false, .. }, _)) =>
+                return Ok((toks, tts)),
+            Some(&(Tokk::Delimiter{ is_open: true, delim }, ref loc)) => {
+                let (rest, tts_inner) = parse_tts_helper(&toks[1..])?;
                 toks = rest;
-                match_slice!{ toks;
-                    [] => return Err(UnmatchedDelimError(loc.clone())),
-                    [(Tokk::Delimiter{ is_open: false, delim: delim2 }, ref loc2), !..] => {
+                match toks.first() {
+                    None => return Err(UnmatchedDelimError(loc.clone())),
+                    Some(&(Tokk::Delimiter{ is_open: false, delim: delim2 }, ref loc2)) => {
+                        toks = &toks[1..];
                         if delim == delim2 {
                             tts.push((TTKind::Tree{
                                 tts: tts_inner,
@@ -48,14 +34,14 @@ fn parse_tts_helper<'a, 'b>(mut toks: &'b [Token<'a>])
                             return Err(UnmatchedDelimError(loc2.clone()));
                         }
                     },
-                    _ => unreachable!(),
+                    Some(_) => unreachable!(), // parse_tts_helper() only stops
+                                               // before close delimiter or EOF
                 }
             },
-            [(Tokk::Delimiter{ is_open: false, .. }, _), ..] =>
-                return Ok((toks, tts)),
-            [(ref tokk, ref loc), !..] =>
-                tts.push((TTKind::Token(tokk.clone()), loc.clone())),
-            _ => unreachable!(),
+            Some(&(ref tokk, ref loc)) => {
+                toks = &toks[1..];
+                tts.push((TTKind::Token(tokk.clone()), loc.clone()));
+            },
         }
     }
 }
