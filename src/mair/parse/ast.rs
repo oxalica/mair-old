@@ -35,7 +35,7 @@ pub enum ItemKind<'a> {
     /// `body` will be always an `Expr::Block`.
     Func        { sig: FuncSig<'a>, body: Expr<'a> },
     /// `extern [abi] { <item1> ... }`
-    Extern      { abi: Option<&'a str>, items: Vec<Item<'a>> },
+    Extern      { abi: ABI<'a>, items: Vec<Item<'a>> },
     /// `type <alias> <template> [where_clause] = <origin>;`
     Type        { alias: &'a str, templ: Template<'a>, origin: Ty<'a> },
     /// `struct <name> <template> [where_clause];`
@@ -137,7 +137,7 @@ pub struct FuncTy<'a> {
     pub is_unsafe: bool,
     /// Variable arguments
     pub is_va:     bool,
-    pub abi:       Option<&'a str>,
+    pub abi:       ABI<'a>,
     pub args:      Vec<FuncArg<'a>>,
     pub ret_ty:    Ty<'a>,
 }
@@ -147,6 +147,13 @@ pub struct FuncTy<'a> {
 pub struct FuncArg<'a> {
     pub pat: Pat<'a>,
     pub ty:  Ty<'a>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ABI<'a> {
+    Normal,
+    Extern,
+    Specific(&'a str),
 }
 
 /// The argument `self`.
