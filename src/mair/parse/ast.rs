@@ -1,4 +1,5 @@
 use std::cmp::Eq;
+use std::rc::Rc;
 use super::lexer::{Loc, TokenKind};
 use super::{imax, fmax};
 
@@ -35,7 +36,7 @@ pub enum ItemKind<'a> {
     /// `body` will be always an `Expr::Block`.
     Func        { sig: FuncSig<'a>, body: Expr<'a> },
     /// `extern [abi] { <item1> ... }`
-    Extern      { abi: ABI<'a>, items: Vec<Item<'a>> },
+    Extern      { abi: ABI, items: Vec<Item<'a>> },
     /// `type <alias> <template> [where_clause] = <origin>;`
     Type        { alias: &'a str, templ: Template<'a>, origin: Ty<'a> },
     /// `struct <name> <template> [where_clause];`
@@ -137,7 +138,7 @@ pub struct FuncTy<'a> {
     pub is_unsafe: bool,
     /// Variable arguments
     pub is_va:     bool,
-    pub abi:       ABI<'a>,
+    pub abi:       ABI,
     pub args:      Vec<FuncArg<'a>>,
     pub ret_ty:    Ty<'a>,
 }
@@ -149,11 +150,11 @@ pub struct FuncArg<'a> {
     pub ty:  Ty<'a>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum ABI<'a> {
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ABI {
     Normal,
     Extern,
-    Specific(&'a str),
+    Specific(Rc<String>),
 }
 
 /// The argument `self`.
@@ -349,7 +350,7 @@ pub enum Literal<'a> {
     /// A char or byte char.
     CharLike { is_byte: bool, ch: char },
     /// A string, raw string, byte string or raw byte string.
-    StrLike  { is_bytestr: bool, s: String },
+    StrLike  { is_bytestr: bool, s: Rc<String> },
     /// An interer type. If it has no type suffix, `ty` is None.
     IntLike  { ty: Option<Ty<'a>>, val: imax },
     /// An floating point type. If it has no type suffix, `ty` is None.
@@ -364,7 +365,7 @@ impl<'a> Attr<'a> {
             key: "doc",
             value: Literal::StrLike{
                 is_bytestr: false,
-                s: doc.to_string(),
+                s: Rc::new(doc.to_string()),
             },
         }
     }
