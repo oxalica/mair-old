@@ -1,5 +1,6 @@
 #![cfg_attr(feature="clippy", allow(never_loop))] // TODO: https://github.com/Manishearth/rust-clippy/issues/1586
 
+use std::rc::Rc;
 use std::ops::Range;
 use std::collections::HashMap;
 use std::char::from_u32;
@@ -431,7 +432,7 @@ fn parse_str_string(source: &str, is_bytestr: bool, is_raw: bool)
             }
         }
     };
-    Ok(Lit::StrLike{ is_bytestr, s })
+    Ok(Lit::StrLike{ is_bytestr, s: Rc::new(s) })
 }
 
 impl<'input> Iterator for Tokenizer<'input> {
@@ -642,7 +643,7 @@ pub mod test { // pub for reuse
         assert_eq!(lex("0b21"),         Err(LexicalError{ pos: 0, kind: InvalidNumberSuffix })); // suffix match `b21` and fails
         assert_eq!(lex("0b_1_2"),       Err(LexicalError{ pos: 0, kind: InvalidNumberSuffix })); // suffix match `2` and fails
 
-        let lstr = |is_bytestr, s| Literal(Lit::StrLike{ is_bytestr, s: String::from(s) });
+        let lstr = |is_bytestr, s| Literal(Lit::StrLike{ is_bytestr, s: Rc::new(String::from(s)) });
         assert_eq!(lex(r#" "\"" "#),        Ok(vec![(lstr(false, "\""), 1..5)]));
         assert_eq!(lex(r#" b" \" \" " "#),  Ok(vec![(lstr(true, " \" \" "), 1..11)]));
         assert_eq!(lex(r#" r"\" "#),        Ok(vec![(lstr(false, "\\"), 1..5)]));
