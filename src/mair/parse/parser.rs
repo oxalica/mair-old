@@ -1,6 +1,9 @@
 use super::lexer::{TokenKind as Tokk, Token};
-use super::ast::{TT, TTKind};
+use super::ast::*;
 use super::error::UnmatchedDelimError;
+use super::putback_stream::PutbackStream;
+
+pub struct Parser<'t>(PutbackStream<TT<'t>>);
 
 /// Parse tokens into `TT`s.
 pub fn parse_tts<'a>(toks: &[Token<'a>]) -> Result<Vec<TT<'a>>, UnmatchedDelimError> {
@@ -43,6 +46,23 @@ fn parse_tts_helper<'a, 'b>(mut toks: &'b [Token<'a>])
                 tts.push((TTKind::Token(tokk.clone()), loc.clone()));
             },
         }
+    }
+}
+
+/// Parser a `.rs` file. It will never fail, and source with grammar errors will
+/// be parsed into specific position (as TT) of AST.
+pub fn parse_crate(tts: Vec<TT>) -> Mod {
+    Parser::new(tts).eat_mod_end()
+}
+
+impl<'t> Parser<'t> {
+    pub fn new(tts: Vec<TT<'t>>) -> Self {
+        Parser(PutbackStream::new(tts))
+    }
+
+    /// Eat inner attributes and then items to the end.
+    pub fn eat_mod_end(&mut self) -> Mod<'t> {
+        unimplemented!()
     }
 }
 
