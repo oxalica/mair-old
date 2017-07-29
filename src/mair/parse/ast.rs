@@ -34,7 +34,7 @@ pub enum ItemKind<'a> {
     Mod         { name: &'a str, items: Vec<Item<'a>> },
     /// `fn <sig> <body>`
     /// `body` will be always an `Expr::Block`.
-    Func        { sig: FuncSig<'a>, body: Expr<'a> },
+    Func        { sig: FuncSig<'a>, body: Option<Expr<'a>> },
     /// `extern [abi] { <item1> ... }`
     Extern      { abi: ABI, items: Vec<Item<'a>> },
     /// `type <alias> <template> [where_clause] = <origin>;`
@@ -128,7 +128,6 @@ pub enum Restrict<'a> {
 pub struct FuncSig<'a> {
     pub name:      &'a str,
     pub templ:     Template<'a>,
-    pub self_arg:  SelfArg,
     pub arg_names: Vec<Pat<'a>>,
     pub ty:        FuncTy<'a>,
 }
@@ -136,18 +135,12 @@ pub struct FuncSig<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FuncTy<'a> {
     pub is_unsafe: bool,
+    pub abi:       ABI,
+    pub self_arg:  SelfArg,
+    pub args:      Vec<Ty<'a>>,
     /// Variable arguments
     pub is_va:     bool,
-    pub abi:       ABI,
-    pub args:      Vec<FuncArg<'a>>,
     pub ret_ty:    Ty<'a>,
-}
-
-/// An argument of function.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct FuncArg<'a> {
-    pub pat: Pat<'a>,
-    pub ty:  Ty<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
