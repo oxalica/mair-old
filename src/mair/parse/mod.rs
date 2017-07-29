@@ -1,6 +1,7 @@
 pub mod ast;
-pub mod lexer;
-pub mod grammar;
+pub mod error;
+#[macro_use] pub mod lexer; // symbol_type!(), keyword_type!()
+pub mod parser;
 
 /// Integer type with the maximum width supported.
 #[allow(non_camel_case_types)]

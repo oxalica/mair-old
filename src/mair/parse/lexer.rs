@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::char::from_u32;
 use regex::{Regex, Captures, escape};
 use super::{imax, fmax, str_ptr_diff};
-use super::ast::{Literal as Lit, Ty};
+use super::ast::{Literal as Lit, Ty, Delimiter};
+use super::error::{LexicalError, LexicalErrorKind};
 
 pub type Pos = usize;
 pub type Loc = Range<Pos>;
@@ -25,23 +26,10 @@ pub enum TokenKind<'input> {
     Lifetime(&'input str),
     /// A char, string or number literal.
     Literal(Lit<'input>),
+    /// A delimiter.
+    Delimiter{ is_open: bool, delim: Delimiter },
     /// A symbol.
-    Symbol(LexSymbol),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct LexicalError<P> {
-    pub pos:  P,
-    pub kind: LexicalErrorKind,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum LexicalErrorKind {
-    UnknowToken,
-    UnclosedComment,
-    UnterminatedString,
-    InvalidNumberSuffix,
-    InvalidEscape,
+    Symbol(SymbolType),
 }
 
 /// An iterator over escaped `&str` producing unescaped chars
@@ -59,16 +47,20 @@ pub struct Lexer<'input> {
 }
 
 macro_rules! define_symbols(
-    ($($tok:ident = $s:expr;)+) => {
+    ($($tok:ident = $s:tt;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-        pub enum LexSymbol {
+        pub enum SymbolType {
             $($tok,)+
         }
 
+        macro_rules! symbol_type {
+            $(($s) => ($crate::parse::lexer::SymbolType::$tok);)*
+        }
+
         lazy_static! {
-            static ref SYMBOLS: HashMap<&'static str, LexSymbol> = {
+            static ref SYMBOLS: HashMap<&'static str, SymbolType> = {
                 let mut m = HashMap::new();
-                $(m.insert($s, LexSymbol::$tok);)+
+                $(m.insert($s, SymbolType::$tok);)+
                 m
             };
             static ref RESTR_SYMBOLS: String = {
@@ -81,10 +73,14 @@ macro_rules! define_symbols(
 );
 
 macro_rules! define_keywords {
-    ($($kw:ident = $s:expr;)+) => {
+    ($($kw:ident = $s:tt;)+) => {
         #[derive(Debug, PartialEq, Eq, Clone, Copy)]
         pub enum KeywordType {
             $($kw,)+
+        }
+
+        macro_rules! keyword_type {
+            $(($s) => ($crate::parse::lexer::KeywordType::$kw);)*
         }
 
         lazy_static! {
@@ -102,12 +98,6 @@ define_symbols!{
     // https://doc.rust-lang.org/grammar.html#symbols
     // https://doc.rust-lang.org/grammar.html#unary-operator-expressions
 
-    LBracket    = "[";
-    RBracket    = "]";
-    LParen      = "(";
-    RParen      = ")";
-    LBrace      = "{";
-    RBrace      = "}";
     Comma       = ",";
     Semi        = ";";
     At          = "@";
@@ -157,58 +147,58 @@ define_symbols!{
 
 define_keywords! {
     // https://doc.rust-lang.org/grammar.html#keywords
-    KwAbstract  = "abstract";
-    KwAlignof   = "alignof";
-    KwAs        = "as";
-    KwBecome    = "become";
-    KwBox       = "box";
-    KwBreak     = "break";
-    KwConst     = "const";
-    KwContinue  = "continue";
-    KwCrate     = "crate";
-    KwDo        = "do";
-    KwElse      = "else";
-    KwEnum      = "enum";
-    KwExtern    = "extern";
-    KwFalse     = "false";
-    KwFinal     = "final";
-    KwFn        = "fn";
-    KwFor       = "for";
-    KwIf        = "if";
-    KwImpl      = "impl";
-    KwIn        = "in";
-    KwLet       = "let";
-    KwLoop      = "loop";
-    KwMacro     = "macro";
-    KwMatch     = "match";
-    KwMod       = "mod";
-    KwMove      = "move";
-    KwMut       = "mut";
-    KwOffsetof  = "offsetof";
-    KwOverride  = "override";
-    KwPriv      = "priv";
-    KwProc      = "proc";
-    KwPub       = "pub";
-    KwPure      = "pure";
-    KwRef       = "ref";
-    KwReturn    = "return";
-    KwSelfTy    = "Self";
-    KwSelfVar   = "self";
-    KwSizeof    = "sizeof";
-    KwStatic    = "static";
-    KwStruct    = "struct";
-    KwSuper     = "super";
-    KwTrait     = "trait";
-    KwTrue      = "true";
-    KwType      = "type";
-    KwTypeof    = "typeof";
-    KwUnsafe    = "unsafe";
-    KwUnsized   = "unsized";
-    KwUse       = "use";
-    KwVirtual   = "virtual";
-    KwWhere     = "where";
-    KwWhile     = "while";
-    KwYield     = "yield";
+    Abstract  = "abstract";
+    Alignof   = "alignof";
+    As        = "as";
+    Become    = "become";
+    Box       = "box";
+    Break     = "break";
+    Const     = "const";
+    Continue  = "continue";
+    Crate     = "crate";
+    Do        = "do";
+    Else      = "else";
+    Enum      = "enum";
+    Extern    = "extern";
+    False     = "false";
+    Final     = "final";
+    Fn        = "fn";
+    For       = "for";
+    If        = "if";
+    Impl      = "impl";
+    In        = "in";
+    Let       = "let";
+    Loop      = "loop";
+    Macro     = "macro";
+    Match     = "match";
+    Mod       = "mod";
+    Move      = "move";
+    Mut       = "mut";
+    Offsetof  = "offsetof";
+    Override  = "override";
+    Priv      = "priv";
+    Proc      = "proc";
+    Pub       = "pub";
+    Pure      = "pure";
+    Ref       = "ref";
+    Return    = "return";
+    SelfTy    = "Self";
+    SelfVar   = "self";
+    Sizeof    = "sizeof";
+    Static    = "static";
+    Struct    = "struct";
+    Super     = "super";
+    Trait     = "trait";
+    True      = "true";
+    Type      = "type";
+    Typeof    = "typeof";
+    Unsafe    = "unsafe";
+    Unsized   = "unsized";
+    Use       = "use";
+    Virtual   = "virtual";
+    Where     = "where";
+    While     = "while";
+    Yield     = "yield";
 } // define_keywords!
 
 /// The regex match a char(maybe escaped).
@@ -254,6 +244,7 @@ lazy_static! {
         )|
         (?P<char>(?P<char_byte>b)?'(?P<char_content>{chr})')|
         (?P<lifetime>'[A-Za-z_]\w*)|
+        (?P<delimiter>\(|\[|\{{|\}}|\]|\))|
         (?P<symbol>{symbols})|
         (?P<keyword>(?:{keywords})\b)|
         (?P<ident>[A-Za-z_]\w*)
@@ -469,6 +460,7 @@ impl<'input> Iterator for Tokenizer<'input> {
                     _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
                     _ if is("char")                 => Some(Literal(parse_cap_char(&cap)?)),
                     _ if is("num")                  => Some(Literal(parse_cap_num(&cap)?)),
+                    m if is("symbol")               => Some(Symbol(SYMBOLS[m])),
                     _ if is("string")               => {
                         if !is("string_closed") {
                             Err(UnterminatedString)?
@@ -489,7 +481,19 @@ impl<'input> Iterator for Tokenizer<'input> {
                         self.eat_block_comment()?;
                         None
                     },
-                    m if is("symbol")               => Some(Symbol(SYMBOLS[m])),
+                    m if is("delimiter")            => {
+                        use self::Delimiter::*;
+                        let is_open = match m {
+                            "(" | "[" | "{" => true,
+                            _               => false,
+                        };
+                        let delim = match m {
+                            "(" | ")" => Paren,
+                            "[" | "]" => Bracket,
+                            _         => Brace,
+                        };
+                        Some(Delimiter{ is_open, delim })
+                    },
                     _ => unreachable!(),
                 })
             };
@@ -538,10 +542,10 @@ impl<'input> Iterator for Lexer<'input> {
 pub mod test { // pub for reuse
     use super::*;
     use super::TokenKind::*;
-    use super::KeywordType::*;
+    use super::KeywordType as Kw;
     use super::LexicalErrorKind::*;
 
-    pub fn lex(input: &str) -> Result<Vec<(TokenKind, Loc)>, LexicalError<usize>> {
+    pub fn lex(input: &str) -> Result<Vec<Token>, LexicalError<usize>> {
         let mut v = vec![];
         for c in Lexer::new(input) {
             v.push(c?);
@@ -581,7 +585,7 @@ pub mod test { // pub for reuse
     fn lexer_keyword_ident() {
         assert_eq!(lex("_"),        Ok(vec![(Ident("_"), 0..1)]));
         assert_eq!(lex("a"),        Ok(vec![(Ident("a"), 0..1)]));
-        assert_eq!(lex("as"),       Ok(vec![(Keyword(KwAs), 0..2)]));
+        assert_eq!(lex("as"),       Ok(vec![(Keyword(Kw::As), 0..2)]));
         assert_eq!(lex("asc"),      Ok(vec![(Ident("asc"), 0..3)]));
         assert_eq!(lex("a0__c_"),   Ok(vec![(Ident("a0__c_"), 0..6)]));
         assert_eq!(lex("_9 a0"),    Ok(vec![(Ident("_9"), 0..2), (Ident("a0"), 3..5)]));
@@ -662,6 +666,18 @@ pub mod test { // pub for reuse
 
         assert_eq!(lex("'a 'a"),    Ok(vec![(Lifetime("a"), 0..2), (Lifetime("a"), 3..5)]));
         assert_eq!(lex("'_1a"),     Ok(vec![(Lifetime("_1a"), 0..4)]));
+    }
+
+    #[test]
+    fn lexer_delimiter() {
+        use super::super::ast::Delimiter::*;
+        let delim = |is_open, delim| Ok(vec![(TokenKind::Delimiter{ is_open , delim }, 0..1)]);
+        assert_eq!(lex("("), delim(true , Paren  ));
+        assert_eq!(lex("["), delim(true , Bracket));
+        assert_eq!(lex("{"), delim(true , Brace  ));
+        assert_eq!(lex(")"), delim(false, Paren  ));
+        assert_eq!(lex("]"), delim(false, Bracket));
+        assert_eq!(lex("}"), delim(false, Brace  ));
     }
 
     #[test]
