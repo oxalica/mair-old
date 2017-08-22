@@ -398,17 +398,19 @@ fn parse_cap_num<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalErrorKind> {
             let ty_suf = Ty::from_name(cap_suf.get(0).unwrap().as_str());
             if cap_suf.name("int_like").is_some() {
                 match lit {
-                    IntLike{ ref mut ty, .. }   => *ty = Some(ty_suf),
+                    IntLike{ ref mut ty, .. }   =>
+                        *ty = Some(Box::new(ty_suf)),
                     FloatLike{..}               => return err,
                     _                           => unreachable!(),
                 }
             } else { // float-like
                 match lit {
                     IntLike{ val, .. }          => lit = FloatLike {
-                        ty: Some(ty_suf),
+                        ty: Some(Box::new(ty_suf)),
                         val: val as fmax,
                     },
-                    FloatLike{ ref mut ty, .. } => *ty = Some(ty_suf),
+                    FloatLike{ ref mut ty, .. } =>
+                        *ty = Some(Box::new(ty_suf)),
                     _                           => unreachable!(),
                 }
             }
@@ -629,8 +631,8 @@ pub mod test { // pub for reuse
 
     #[test]
     fn lexer_literal_lifetime() {
-        let styi32 = Some(Ty::from_name("i32"));
-        let styf64 = Some(Ty::from_name("f64"));
+        let styi32 = Some(Box::new(Ty::from_name("i32")));
+        let styf64 = Some(Box::new(Ty::from_name("f64")));
 
         assert_eq!(lex("1"),            Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 1 }), 0..1)]));
         assert_eq!(lex("1i32"),         Ok(vec![(Literal(Lit::IntLike{ ty: styi32.clone(), val: 1 }), 0..4)]));
