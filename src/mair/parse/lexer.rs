@@ -54,6 +54,7 @@ macro_rules! define_symbols(
             $($tok,)+
         }
 
+        #[macro_export] // TODO: remove it
         macro_rules! symbol_type {
             $(($s) => ($crate::parse::lexer::SymbolType::$tok);)*
         }
@@ -80,6 +81,7 @@ macro_rules! define_keywords {
             $($kw,)+
         }
 
+        #[macro_export] // TODO: remove it
         macro_rules! keyword_type {
             $(($s) => ($crate::parse::lexer::KeywordType::$kw);)*
         }
