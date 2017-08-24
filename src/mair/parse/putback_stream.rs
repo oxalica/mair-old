@@ -13,6 +13,11 @@ impl<T> PutbackStream<T> {
         PutbackStream(tts)
     }
 
+    pub fn rest(mut self) -> Vec<T> {
+        self.0.reverse();
+        self.0
+    }
+
     pub fn peek(&self, index: usize) -> Option<&T> {
         let len = self.0.len();
         if index < len {
