@@ -188,6 +188,29 @@ impl<'t> Parser<'t> {
         Mod{ inner_attrs, items }
     }
 
+    /// Eat and return inner attributes and items inside `{}`, or return None.
+    fn eat_opt_brace_mod(&mut self) -> Option<Mod<'t>> {
+        match_eat!{ self.0;
+            tree!(_, delim: Brace, tts) =>
+                Some(Parser::new(tts).eat_mod_end()),
+            _ => None,
+        }
+    }
+
+    /// Eat and return an identifier, or return the empty str slice after the
+    /// last TT eaten.
+    fn eat_ident(&mut self) -> &'t str {
+        unimplemented!()
+    }
+
+    /// Eat a semicolon, return whether it success.
+    fn eat_semi(&mut self) -> bool {
+        match_eat!{ self.0;
+            sym!(";") => true,
+            _ => false,
+        }
+    }
+
     /// Eat inner attributes as more as possible.
     fn eat_inner_attrs(&mut self) -> Vec<Attr<'t>> {
         let mut v = vec![];
@@ -261,7 +284,338 @@ impl<'t> Parser<'t> {
 
     /// Eat and return the detail of an item, or return None.
     fn eat_opt_item_detail(&mut self) -> Option<ItemKind<'t>> {
+        if let Some(p) = self.eat_opt_plugin_invoke() {
+            return Some(ItemKind::PluginInvoke(p));
+        }
+        match_eat!{ self.0;
+            kw!("extern"), kw!("crate") => Some(self.eat_extern_crate_tail()),
+            kw!("use") => Some(self.eat_use_tail()),
+            kw!("mod") => Some(self.eat_mod_tail()),
+            kw!("fn") =>
+                Some(self.eat_fn_tail(false, ABI::Normal)),
+            kw!("extern"), kw!("fn") =>
+                Some(self.eat_fn_tail(false, ABI::Extern)),
+            kw!("extern"), lit_str!(abi), kw!("fn") =>
+                Some(self.eat_fn_tail(false, ABI::Specific(abi))),
+            kw!("unsafe"), kw!("fn") =>
+                Some(self.eat_fn_tail(true, ABI::Normal)),
+            kw!("unsafe"), kw!("extern"), kw!("fn") =>
+                Some(self.eat_fn_tail(true, ABI::Extern)),
+            kw!("unsafe"), kw!("extern"), lit_str!(abi), kw!("fn") =>
+                Some(self.eat_fn_tail(true, ABI::Specific(abi))),
+            kw!("extern") => Some(self.eat_extern_tail()),
+            kw!("type")   => Some(self.eat_type_tail()),
+            kw!("struct") => Some(self.eat_struct_tail()),
+            kw!("enum")   => Some(self.eat_enum_tail()),
+            kw!("const")  => Some(self.eat_const_static_tail(false)),
+            kw!("static") => Some(self.eat_const_static_tail(true)),
+            kw!("trait")  => Some(self.eat_trait_tail()),
+            kw!("impl")   => Some(self.eat_impl_tail()),
+            _ => None,
+        }
+    }
+
+    /// Eat the tail after `extern crate`.
+    fn eat_extern_crate_tail(&mut self) -> ItemKind<'t> {
+        let name = self.eat_ident();
+        let semi = self.eat_semi();
+        ItemKind::ExternCrate{ name, semi }
+    }
+
+    /// Eat the tail after `use`.
+    fn eat_use_tail(&mut self) -> ItemKind<'t> {
+        match_eat!{ self.0; // `use` always uses absolute path
+            sym!("::") => (),
+            _ => (),
+        };
+        let mut comps = vec![];
+        loop {
+            match_eat!{ self.0;
+                ident!(s), sym!("::") => comps.push(s),
+                _ => break,
+            }
+        }
+        let opt_names = self.eat_use_names();
+        let semi = self.eat_semi();
+        match opt_names {
+            None => ItemKind::UseAll{ comps, semi },
+            Some(names) => ItemKind::UseSome{ comps, names, semi },
+        }
+    }
+
+    /// Eat and return the using names in item `use`, return None if `*`.
+    fn eat_use_names(&mut self) -> Option<Vec<UseName<'t>>> {
+        match_eat!{ self.0;
+            sym!("*") => None,
+            ident!(name) => Some(vec![UseName::Name{ name, alias: None }]),
+            tree!(_, delim: Brace, tts) => {
+                let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    UseName::Unknow,
+                    |p| {
+                        let name = p.eat_ident();
+                        let alias = match_eat!{ p.0;
+                            kw!("as") => Some(p.eat_ident()),
+                            _ => None,
+                        };
+                        UseName::Name{ name, alias }
+                    },
+                );
+                Some(v)
+            },
+            _ => None,
+        }
+    }
+
+    /// Eat the tail after `mod`.
+    fn eat_mod_tail(&mut self) -> ItemKind<'t> {
+        let name = self.eat_ident();
+        if let Some(inner) = self.eat_opt_brace_mod() {
+            ItemKind::Mod{ name, inner }
+        } else {
+            let semi = self.eat_semi();
+            ItemKind::ExternMod{ name, semi }
+        }
+    }
+
+    /// Eat the tail after `[unsafe] [extern [<abt>]] fn`.
+    fn eat_fn_tail(&mut self, is_unsafe: bool, abi: ABI) -> ItemKind<'t> {
+        let sig = Box::new(self.eat_fn_sig());
+        if let Some(body) = self.eat_opt_block_expr() {
+            ItemKind::Func{ sig, body: Box::new(body) }
+        } else {
+            let semi = self.eat_semi();
+            ItemKind::FuncDecl{ sig, semi }
+        }
+    }
+
+    /// Eat and return the signature of a function.
+    fn eat_fn_sig(&mut self) -> FuncSig<'t> {
         unimplemented!()
+    }
+
+    /// Eat the tail after `extern` (item `extern`).
+    fn eat_extern_tail(&mut self) -> ItemKind<'t> {
+        let abi = match_eat!{ self.0;
+            lit_str!(abi) => ABI::Specific(abi),
+            _ => ABI::Extern,
+        };
+        let inner = self.eat_opt_brace_mod();
+        ItemKind::Extern{ abi, inner }
+    }
+
+    /// Eat the tail after `type`.
+    fn eat_type_tail(&mut self) -> ItemKind<'t> {
+        let alias = self.eat_ident();
+        let templ = self.eat_templ();
+        let whs = self.eat_opt_whs();
+        let origin = match_eat!{ self.0;
+            sym!("=") => Some(Box::new(self.eat_ty())),
+            _ => None,
+        };
+        let semi = self.eat_semi();
+        ItemKind::Type{ alias, templ, whs, origin, semi }
+    }
+
+    /// Eat the tail after `struct`.
+    fn eat_struct_tail(&mut self) -> ItemKind<'t> {
+        let name = self.eat_ident();
+        let templ = self.eat_templ();
+        match_eat!{ self.0;
+            tree!(_, delim: Paren, tts) => {
+                let (elems, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    StructTupleElem::Unknow,
+                    Parser::eat_struct_tuple_elem,
+                );
+                let whs = self.eat_opt_whs();
+                let semi = self.eat_semi();
+                ItemKind::StructTuple{ name, templ, elems, whs, semi }
+            },
+            _ => {
+                let whs = self.eat_opt_whs();
+                let opt_fields = match_eat!{ self.0;
+                    tree!(_, delim: Brace, tts) => {
+                        let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                            StructField::Unknow,
+                            Parser::eat_struct_field,
+                        );
+                        Some(v)
+                    },
+                    _ => None,
+                };
+                if let Some(fields) = opt_fields {
+                    ItemKind::StructFields{ name, templ, whs, fields }
+                } else {
+                    ItemKind::StructUnit{ name, templ, whs }
+                }
+            },
+        }
+    }
+
+    /// Eat and return an element of tuple-like-struct.
+    fn eat_struct_tuple_elem(&mut self) -> StructTupleElem<'t> {
+        let attrs = self.eat_outer_attrs();
+        let is_pub = match_eat!{ self.0;
+            kw!("pub") => true,
+            _ => false,
+        };
+        let ty = self.eat_ty();
+        StructTupleElem::Elem{ attrs, is_pub, ty }
+    }
+
+    /// Eat and return a field of struct with fields.
+    fn eat_struct_field(&mut self) -> StructField<'t> {
+        let attrs = self.eat_outer_attrs();
+        let is_pub = match_eat!{ self.0;
+            kw!("pub") => true,
+            _ => false,
+        };
+        let name = self.eat_ident();
+        let ty = match_eat!{ self.0;
+            sym!(":") => Some(self.eat_ty()),
+            _ => None,
+        };
+        StructField::Field{ attrs, is_pub, name, ty }
+    }
+
+    /// Eat the tail after `enum`.
+    fn eat_enum_tail(&mut self) -> ItemKind<'t> {
+        let name = self.eat_ident();
+        let templ = self.eat_templ();
+        let whs = self.eat_opt_whs();
+        let vars = match_eat!{ self.0;
+            tree!(_, delim: Brace, tts) => {
+                let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    EnumVar::Unknow,
+                    Parser::eat_enum_var,
+                );
+                Some(v)
+            },
+            _ => None,
+        };
+        ItemKind::Enum{ name, templ, whs, vars }
+    }
+
+    /// Eat a variant of `enum`.
+    fn eat_enum_var(&mut self) -> EnumVar<'t> {
+        let attrs = self.eat_outer_attrs();
+        let name = self.eat_ident();
+        match_eat!{ self.0;
+            tree!(_, delim: Paren, tts) => {
+                let (elems, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    StructTupleElem::Unknow,
+                    Parser::eat_struct_tuple_elem,
+                );
+                EnumVar::Tuple{ attrs, name, elems }
+            },
+            tree!(_, delim: Brace, tts) => {
+                let (fields, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    StructField::Unknow,
+                    Parser::eat_struct_field,
+                );
+                EnumVar::Struct{ attrs, name, fields }
+            },
+            _ => EnumVar::Unit{ attrs, name },
+        }
+    }
+
+    /// Eat the tail after `const` or `static`.
+    fn eat_const_static_tail(&mut self, is_static: bool) -> ItemKind<'t> {
+        let name = self.eat_ident();
+        let ty = match_eat!{ self.0;
+            sym!(":") => Some(Box::new(self.eat_ty())),
+            _ => None,
+        };
+        let val = match_eat!{ self.0;
+            sym!("=") => Some(Box::new(self.eat_expr(false))),
+            _ => None,
+        };
+        if is_static {
+            ItemKind::Static{ name, ty, val }
+        } else {
+            ItemKind::Const{ name, ty, val }
+        }
+    }
+
+    /// Eat the tail after `trait`.
+    fn eat_trait_tail(&mut self) -> ItemKind<'t> {
+        let name = self.eat_ident();
+        let base = match_eat!{ self.0;
+            sym!(":") => Some(Box::new(self.eat_ty())),
+            _ => None,
+        };
+        let whs = self.eat_opt_whs();
+        let inner = self.eat_opt_brace_mod();
+        ItemKind::Trait{ name, base, whs, inner }
+    }
+
+    /// Eat the tail after `impl`.
+    fn eat_impl_tail(&mut self) -> ItemKind<'t> {
+        let templ = self.eat_templ();
+        let ty = self.eat_ty(); // trait_name can be
+        match_eat!{ self.0;
+            kw!("for") => {
+                let trait_name = match ty {
+                    Ty::Apply(x) => Some(x),
+                    _ => None,
+                };
+                let ty = Box::new(self.eat_ty());
+                let whs = self.eat_opt_whs();
+                let inner = self.eat_opt_brace_mod();
+                ItemKind::ImplTrait{ templ, trait_name, ty, whs, inner }
+            },
+            _ => {
+                let whs = self.eat_opt_whs();
+                let inner = self.eat_opt_brace_mod();
+                ItemKind::ImplType{ templ, ty: Box::new(ty), whs, inner }
+            },
+        }
+    }
+
+    /// Eat and return a template (including `<>`), or return an empty
+    /// template.
+    fn eat_templ(&mut self) -> Template<'t> {
+        unimplemented!()
+    }
+
+    /// Eat and return `where` clause, or return None.
+    fn eat_opt_whs(&mut self) -> OptWhere<'t> {
+        unimplemented!()
+    }
+
+    /// Eat and return a type.
+    fn eat_ty(&mut self) -> Ty<'t> {
+        unimplemented!()
+    }
+
+    /// Eat and return an expression. If `item_like_first` is true and the
+    /// following TTs can be a item-like-expr, it will return immediately
+    /// without checking binary ops. Eg. `m!{} - 1` will be parsed into `m!{}`
+    /// and `-1` will be remained.
+    fn eat_expr(&mut self, item_like_first: bool) -> Expr<'t> {
+        unimplemented!()
+    }
+
+    /// Eat and return a block expression, or return None.
+    fn eat_opt_block_expr(&mut self) -> Option<Expr<'t>> {
+        unimplemented!()
+    }
+
+    /// Eat and return an plugin invoke, or return None.
+    fn eat_opt_plugin_invoke(&mut self) -> Option<PluginInvoke<'t>> {
+        match_eat!{ self.0;
+            ident!(name), sym!("!") => {
+                let ident = match_eat!{ self.0;
+                    ident!(s) => Some(s),
+                    _ => None,
+                };
+                let tt = match_eat!{ self.0;
+                    t@tree!(_, ..) => Some(t),
+                    _ => None,
+                };
+                Some(PluginInvoke{ name, ident, tt })
+            },
+            _ => None,
+        }
     }
 }
 
