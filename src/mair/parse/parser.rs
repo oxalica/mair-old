@@ -150,6 +150,37 @@ impl<'t> Parser<'t> {
         }
     }
 
+    /// Eat many `p`s seperated by `sep` until `is_end`. Return `p`s and
+    /// whether it consumes tailing `sep`.
+    fn eat_many_tail<T, F, G, P>(
+        &mut self,
+        sep: SymbolType,
+        mut is_end: F,
+        err: G,
+        p: P,
+    ) -> (Vec<T>, bool)
+    where F: FnMut(&mut Self) -> bool,
+          G: FnMut(TT<'t>) -> T,
+          P: FnMut(&mut Self) -> T {
+        let mut tail = false;
+        let v = self.eat_many(
+            sep,
+            |p_| match_eat!{ p_.0;
+                tok!(Tokk::Symbol(sep_), loc) => if sep_ == sep && is_end(p_) {
+                    tail = true;
+                    true
+                } else {
+                    p_.0.putback((TTKind::Token(Tokk::Symbol(sep_)), loc));
+                    false
+                },
+                _ => is_end(p_),
+            },
+            err,
+            p,
+        );
+        (v, tail)
+    }
+
     /// Eat many `p`s seperated by `,` until the end. Return `p`s and whether
     /// it consumes tailing `,`.
     fn eat_many_comma_tail_end<T, G, P>(
@@ -602,35 +633,140 @@ impl<'t> Parser<'t> {
     /// Eat the tail after `impl`.
     fn eat_impl_tail(&mut self) -> ItemKind<'t> {
         let templ = self.eat_templ();
-        let ty = self.eat_ty(); // trait_name can be
+        let ty = Box::new(self.eat_ty());
         match_eat!{ self.0;
             kw!("for") => {
-                let trait_name = match ty {
-                    Ty::Apply(x) => Some(x),
-                    _ => None,
-                };
+                let tr = ty;
                 let ty = Box::new(self.eat_ty());
                 let whs = self.eat_opt_whs();
                 let inner = self.eat_opt_brace_mod();
-                ItemKind::ImplTrait{ templ, trait_name, ty, whs, inner }
+                ItemKind::ImplTrait{ templ, tr, ty, whs, inner }
             },
             _ => {
                 let whs = self.eat_opt_whs();
                 let inner = self.eat_opt_brace_mod();
-                ItemKind::ImplType{ templ, ty: Box::new(ty), whs, inner }
+                ItemKind::ImplType{ templ, ty, whs, inner }
             },
+        }
+    }
+
+    /// If the next TT starts with `>`, eat `>` and return true. Otherwise,
+    /// return false.
+    fn try_eat_templ_end(&mut self) -> bool {
+        match_eat!{ self.0;
+            sym!(">") => true,
+            sym!(">=", loc) => {
+                self.0.putback((
+                    TTKind::Token(Tokk::Symbol(symbol_type!("="))),
+                    loc.start+1..loc.end,
+                ));
+                true
+            },
+            sym!(">>=", loc) => {
+                self.0.putback((
+                    TTKind::Token(Tokk::Symbol(symbol_type!(">="))),
+                    loc.start+1..loc.end,
+                ));
+                true
+            },
+            _ => false,
         }
     }
 
     /// Eat and return a template (including `<>`), or return an empty
     /// template.
     fn eat_templ(&mut self) -> Template<'t> {
-        unimplemented!()
+        match_eat!{ self.0;
+            sym!("<") => {
+                let (v, _) = self.eat_many_tail(
+                    symbol_type!(","),
+                    |p| p.try_eat_templ_end(),
+                    TemplArg::Unknow,
+                    Parser::eat_templ_arg,
+                );
+                v
+            },
+            _ => vec![],
+        }
+    }
+
+    /// Eat a template argument.
+    fn eat_templ_arg(&mut self) -> TemplArg<'t> {
+        match_eat!{ self.0;
+            lt!(name) => {
+                let bound = match_eat!{ self.0;
+                    sym!(":") => Some(self.eat_lifetime_bound()),
+                    _ => None,
+                };
+                TemplArg::Lifetime{ name, bound }
+            },
+            ident!(name) => {
+                let bound = match_eat!{ self.0;
+                    sym!(":") => Some(self.eat_ty()),
+                    _ => None,
+                };
+                TemplArg::Ty{ name, bound }
+            },
+            _ => TemplArg::Null,
+        }
+    }
+
+    /// Eat and return `'lt1 + 'lt2 + ...`.
+    fn eat_lifetime_bound(&mut self) -> Vec<Lifetime<'t>> {
+        self.eat_many_tail(
+            symbol_type!("+"),
+            |p| match p.0.peek(0) {
+                Some(&lt!(_)) => false,
+                _ => true,
+            },
+            |_| unreachable!(),  // if the next TT is not a lifetime, `end`
+            |p| match_eat!{ p.0; // will return true to stop eating.
+                lt!(x) => x,
+                _ => unreachable!(), //
+            },
+        ).0
     }
 
     /// Eat and return `where` clause, or return None.
     fn eat_opt_whs(&mut self) -> OptWhere<'t> {
-        unimplemented!()
+        match_eat!{ self.0;
+            kw!("where") => {
+                let (restricts, _) = self.eat_many_tail(
+                    symbol_type!(","),
+                    |p| match p.0.peek(0) {
+                        Some(&tree!(_, delim: Brace, ..)) |
+                        Some(&sym!("->")) |
+                        Some(&sym!(";")) => true,
+                        _ => false,
+                    },
+                    Restrict::Unknow,
+                    Parser::eat_restrict,
+                );
+                Some(restricts)
+            },
+            _ => None,
+        }
+    }
+
+    /// Eat a restriction of where clause.
+    fn eat_restrict(&mut self) -> Restrict<'t> {
+        match_eat!{ self.0;
+            lt!(lt) => {
+                let bound = match_eat!{ self.0;
+                    sym!(":") => Some(self.eat_lifetime_bound()),
+                    _ => None,
+                };
+                Restrict::LifeBound{ lt, bound }
+            },
+            _ => {
+                let ty = self.eat_ty();
+                let bound = match_eat!{ self.0;
+                    sym!(":") => Some(self.eat_ty()),
+                    _ => None,
+                };
+                Restrict::TraitBound{ ty, bound }
+            },
+        }
     }
 
     /// Eat and return a pat.
