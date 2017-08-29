@@ -234,6 +234,11 @@ impl<'t> Parser<'t> {
         unimplemented!()
     }
 
+    /// Eat and return a Path.
+    fn eat_path(&mut self) -> Path<'t> {
+        unimplemented!()
+    }
+
     /// Eat a semicolon, return whether it success.
     fn eat_semi(&mut self) -> bool {
         match_eat!{ self.0;
@@ -771,7 +776,75 @@ impl<'t> Parser<'t> {
 
     /// Eat and return a pat.
     fn eat_pat(&mut self) -> Pat<'t> {
-        unimplemented!()
+        if let Some(p) = self.eat_opt_plugin_invoke() {
+            return Pat::PluginInvoke(p);
+        }
+        match_eat!{ self.0;
+            ident!("_") => Pat::Hole,
+            lit!(lit) => match_eat!{ self.0;
+                sym!("..."), lit!(lit2) => Pat::Range(lit, lit2),
+                _ => Pat::Literal(lit),
+            },
+            tree!(_, delim: Paren, tts) => {
+                let (mut v, tail) = Parser::new(tts).eat_many_comma_tail_end(
+                    Pat::Unknow,
+                    Parser::eat_pat,
+                );
+                if v.len() == 1 && !tail {
+                    Pat::Paren(Box::new(v.pop().unwrap()))
+                } else {
+                    Pat::Tuple(v)
+                }
+            },
+            _ => {
+                let name = self.eat_path();
+                match_eat!{ self.0;
+                    tree!(_, delim: Paren, tts) => {
+                        let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                            Pat::Unknow,
+                            Parser::eat_pat,
+                        );
+                        Pat::DestructTuple{ name, elems: v }
+                    },
+                    tree!(_, delim: Brace, mut tts) => {
+                        let ellipsis = match tts.last() {
+                            Some(&sym!("..")) => true,
+                            _ => false,
+                        };
+                        if ellipsis { tts.pop(); }
+                        let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                            DestructField::Unknow,
+                            Parser::eat_destruct_field,
+                        );
+                        Pat::DestructNormal{ name, fields: v, ellipsis }
+                    },
+                    _ => match (name.is_absolute,
+                               name.comps.len(),
+                               name.comps.first()) {
+                        (false, 1, Some(&PathComp::Ident(name))) => {
+                            match_eat!{ self.0;
+                                sym!("@") => {
+                                    let pat = Box::new(self.eat_pat());
+                                    Pat::Bind{ name, pat }
+                                },
+                                _ => Pat::AmbigVar(name),
+                            }
+                        },
+                        _ => Pat::Path(name),
+                    },
+                }
+            },
+        }
+    }
+
+    /// Eat and return a field of pattern on struct with fields.
+    fn eat_destruct_field(&mut self) -> DestructField<'t> {
+        let name = self.eat_ident();
+        let pat = match_eat!{ self.0;
+            sym!(":") => Some(Box::new(self.eat_pat())),
+            _ => None,
+        };
+        DestructField::Field{ name, pat }
     }
 
     /// Eat and return a type.
