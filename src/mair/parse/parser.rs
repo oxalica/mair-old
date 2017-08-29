@@ -379,7 +379,7 @@ impl<'t> Parser<'t> {
 
     /// Eat the tail after `[unsafe] [extern [<abt>]] fn`.
     fn eat_fn_tail(&mut self, is_unsafe: bool, abi: ABI) -> ItemKind<'t> {
-        let sig = Box::new(self.eat_fn_sig());
+        let sig = Box::new(self.eat_fn_sig(is_unsafe, abi));
         if let Some(body) = self.eat_opt_block_expr() {
             ItemKind::Func{ sig, body: Box::new(body) }
         } else {
@@ -389,8 +389,59 @@ impl<'t> Parser<'t> {
     }
 
     /// Eat and return the signature of a function.
-    fn eat_fn_sig(&mut self) -> FuncSig<'t> {
-        unimplemented!()
+    fn eat_fn_sig(&mut self, is_unsafe: bool, abi: ABI) -> FuncSig<'t> {
+        let name = self.eat_ident();
+        let templ = self.eat_templ();
+        let (args, is_va, ret, whs) = match_eat!{ self.0;
+            tree!(_, delim: Paren, mut tts) => {
+                let is_va = match tts.last() {
+                    Some(&sym!("...")) => true,
+                    _ => false,
+                };
+                if is_va { tts.pop(); }
+                let (args, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    FuncParam::Unknow,
+                    Parser::eat_func_param,
+                );
+                let ret = self.eat_opt_ret_ty();
+                let whs = self.eat_opt_whs();
+                (Some(args), is_va, ret, whs)
+            },
+            _ => (None, false, None, None),
+        };
+        FuncSig{ is_unsafe, abi, name, templ, args, is_va, ret, whs }
+    }
+
+    /// Eat and return a parameter of function.
+    fn eat_func_param(&mut self) -> FuncParam<'t> {
+        match_eat!{ self.0;
+            sym!("&"), kw!("mut"), kw!("self") =>
+                FuncParam::SelfRef{ is_mut: true },
+            sym!("&"), kw!("self") =>
+                FuncParam::SelfRef{ is_mut: false },
+            kw!("self"), sym!(":") =>
+                FuncParam::SelfAs(self.eat_ty()),
+            kw!("mut"), kw!("self") =>
+                FuncParam::SelfMove{ is_mut: true },
+            kw!("self") =>
+                FuncParam::SelfMove{ is_mut: false },
+            _ => {
+                let pat = self.eat_pat();
+                let ty = match_eat!{ self.0;
+                    sym!(":") => Some(Box::new(self.eat_ty())),
+                    _ => None,
+                };
+                FuncParam::Bind{ pat, ty }
+            },
+        }
+    }
+
+    /// Eat the return type if the next TT is `->`, or return None.
+    fn eat_opt_ret_ty(&mut self) -> Option<Box<Ty<'t>>> {
+        match_eat!{ self.0;
+            sym!("->") => Some(Box::new(self.eat_ty())),
+            _ => None,
+        }
     }
 
     /// Eat the tail after `extern` (item `extern`).
@@ -579,6 +630,11 @@ impl<'t> Parser<'t> {
 
     /// Eat and return `where` clause, or return None.
     fn eat_opt_whs(&mut self) -> OptWhere<'t> {
+        unimplemented!()
+    }
+
+    /// Eat and return a pat.
+    fn eat_pat(&mut self) -> Pat<'t> {
         unimplemented!()
     }
 
