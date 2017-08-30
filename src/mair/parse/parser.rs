@@ -428,7 +428,7 @@ impl<'t> Parser<'t> {
     fn eat_fn_sig(&mut self, is_unsafe: bool, abi: ABI) -> FuncSig<'t> {
         let name = self.eat_ident();
         let templ = self.eat_templ();
-        let (args, is_va, ret, whs) = match_eat!{ self.0;
+        let (args, is_va, ret_ty, whs) = match_eat!{ self.0;
             tree!(_, delim: Paren, mut tts) => {
                 let is_va = match tts.last() {
                     Some(&sym!("...")) => true,
@@ -439,13 +439,13 @@ impl<'t> Parser<'t> {
                     FuncParam::Unknow,
                     Parser::eat_func_param,
                 );
-                let ret = self.eat_opt_ret_ty();
+                let ret_ty = self.eat_opt_ret_ty();
                 let whs = self.eat_opt_whs();
-                (Some(args), is_va, ret, whs)
+                (Some(args), is_va, ret_ty, whs)
             },
             _ => (None, false, None, None),
         };
-        FuncSig{ is_unsafe, abi, name, templ, args, is_va, ret, whs }
+        FuncSig{ is_unsafe, abi, name, templ, args, is_va, ret_ty, whs }
     }
 
     /// Eat and return a parameter of function.
@@ -849,7 +849,148 @@ impl<'t> Parser<'t> {
 
     /// Eat and return a type.
     fn eat_ty(&mut self) -> Ty<'t> {
-        unimplemented!()
+        match_eat!{ self.0;
+            ident!("_") => Ty::Hole,
+            sym!("!") => Ty::Never,
+            tree!(_, delim: Paren, tts) => {
+                let (mut v, tail) = Parser::new(tts).eat_many_comma_tail_end(
+                    Ty::Unknow,
+                    Parser::eat_ty,
+                );
+                if v.len() == 1 && !tail {
+                    Ty::Paren(Box::new(v.pop().unwrap()))
+                } else {
+                    Ty::Tuple(v)
+                }
+            },
+            tree!(_, delim: Bracket, tts) => {
+                let mut p = Parser::new(tts);
+                let ty = Box::new(p.eat_ty());
+                match_eat!{ p.0;
+                    sym!(";") => {
+                        let size = Box::new(p.eat_expr(false));
+                        Ty::Array{ ty, size, unknow: p.rest() }
+                    },
+                    _ => Ty::Slice{ ty, unknow: p.rest() },
+                }
+            },
+            sym!("&") => {
+                let lt = match_eat!{ self.0;
+                    lt!(lt) => Some(lt),
+                    _ => None,
+                };
+                let is_mut = match_eat!{ self.0;
+                    kw!("mut") => true,
+                    _ => false,
+                };
+                let ty = Box::new(self.eat_ty());
+                Ty::Ref{ lt, is_mut, ty }
+            },
+            sym!("*"), kw!("const") =>
+                Ty::Ptr{ is_mut: false, ty: Box::new(self.eat_ty()) },
+            sym!("*"), kw!("mut") =>
+                Ty::Ptr{ is_mut: true, ty: Box::new(self.eat_ty()) },
+            kw!("fn") =>
+                self.eat_func_ty(false, ABI::Normal),
+            kw!("extern"), kw!("fn") =>
+                self.eat_func_ty(false, ABI::Extern),
+            kw!("extern"), lit_str!(abi), kw!("fn") =>
+                self.eat_func_ty(false, ABI::Specific(abi)),
+            kw!("unsafe"), kw!("fn") =>
+                self.eat_func_ty(true, ABI::Normal),
+            kw!("unsafe"), kw!("extern"), kw!("fn") =>
+                self.eat_func_ty(true, ABI::Extern),
+            kw!("unsafe"), kw!("extern"), lit_str!(abi), kw!("fn") =>
+                self.eat_func_ty(true, ABI::Specific(abi)),
+            _ => {
+                let (mut v, tail) = self.eat_many_tail(
+                    symbol_type!("+"),
+                    |p| !p.is_ty_apply_begin(),
+                    TyApply::Unknow,
+                    Parser::eat_ty_apply,
+                );
+                if v.len() == 1 && !tail {
+                    Ty::Apply(Box::new(v.pop().unwrap()))
+                } else {
+                    Ty::Traits(v)
+                }
+            },
+        }
+    }
+
+    /// Return whether the next TT can be the begin of TyApply.
+    fn is_ty_apply_begin(&self) -> bool {
+        match self.0.peek(0) {
+            Some(&sym!("::")) |
+            Some(&ident!(_)) |
+            Some(&kw!("Self")) => true,
+            _ => false,
+        }
+    }
+
+    /// Eat and return a simple type or applicated type.
+    fn eat_ty_apply(&mut self) -> TyApply<'t> {
+        let name = self.eat_path();
+        let args = match_eat!{ self.0;
+            sym!("<") => {
+                let (args, _) = self.eat_many_tail(
+                    symbol_type!(","),
+                    |p| p.try_eat_templ_end(),
+                    TyApplyArg::Unknow,
+                    Parser::eat_ty_apply_arg,
+                );
+                Some(args)
+            },
+            _ => None,
+        };
+        TyApply::Apply{ name, args }
+    }
+
+    /// Eat and return an argument of parameterized generic type, one of the
+    /// arguments inside angles of `T<'a, i32, K=i32>`.
+    fn eat_ty_apply_arg(&mut self) -> TyApplyArg<'t> {
+        match_eat!{ self.0;
+            lt!(lt) => TyApplyArg::Lifetime(lt),
+            ident!(name), sym!("=") => {
+                let ty = self.eat_ty();
+                TyApplyArg::AssocTy{ name, ty }
+            },
+            _ => TyApplyArg::Ty(self.eat_ty()),
+        }
+    }
+
+    /// Eat the tail (after `fn`) and return a function type.
+    fn eat_func_ty(&mut self, is_unsafe: bool, abi: ABI) -> Ty<'t> {
+        let (args, is_va, ret_ty) = match_eat!{ self.0;
+            tree!(_, delim: Paren, mut tts) => {
+                let is_va = match tts.last() {
+                    Some(&sym!("...")) => true,
+                    _ => false,
+                };
+                if is_va { tts.pop(); }
+                let (args, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    FuncTyParam::Unknow,
+                    |p| match_eat!{ p.0;
+                        ident!(name), sym!(":") =>
+                            FuncTyParam::Param{ name: Some(name)
+                                              , ty: self.eat_ty() },
+                        _ => FuncTyParam::Param{ name: None
+                                               , ty: self.eat_ty() },
+                    },
+                );
+                let ret_ty = self.eat_opt_ret_ty();
+                (Some(args), is_va, ret_ty)
+            },
+            _ => (None, false, None),
+        };
+        let fun_ty = FuncTy{
+            is_unsafe,
+            abi,
+            args,
+            is_va,
+            ret_ty,
+        };
+        Ty::Func(Box::new(fun_ty))
     }
 
     /// Eat and return an expression. If `item_like_first` is true and the
