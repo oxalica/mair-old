@@ -85,10 +85,15 @@ macro_rules! lit {
     ($p:pat, $loc:pat) => { tok!(Tokk::Literal($p), $loc) };
 }
 macro_rules! lit_str {
-    () => { lit!(Literal::StrLike{ is_bytestr: false, .. }) };
     ($s:pat) => { lit_str!($s, _) };
     ($s:pat, $loc:pat) => {
         lit!(Literal::StrLike{ is_bytestr: false, s: $s }, $loc)
+    };
+}
+macro_rules! lit_int {
+    ($i:pat) => { lit_int!($i, _) };
+    ($i:pat, $loc:pat) => {
+        lit!(Literal::IntLike{ ty: None, val: $i }, $loc)
     };
 }
 
@@ -259,7 +264,8 @@ impl<'t> Parser<'t> {
             Some(&lit!(_)) |
             Some(&ident!(_)) | Some(&sym!("::")) |
             Some(&tree!(_, ..)) |
-            Some(&sym!("-")) | Some(&sym!("*")) | Some(&sym!("!")) |
+            Some(&sym!("-")) | Some(&sym!("!")) |
+            Some(&sym!("&")) | Some(&sym!("*")) |
             Some(&sym!("..")) |
             Some(&sym!("|")) | Some(&sym!("||")) | Some(&kw!("move")) |
             Some(&kw!("break")) | Some(&kw!("continue")) |
@@ -297,6 +303,11 @@ impl<'t> Parser<'t> {
 
     /// Eat and return a Path.
     fn eat_path(&mut self) -> Path<'t> {
+        unimplemented!()
+    }
+
+    /// Eat and return a path component.
+    fn eat_path_comp(&mut self) -> PathComp<'t> {
         unimplemented!()
     }
 
@@ -871,7 +882,7 @@ impl<'t> Parser<'t> {
                     _ => match (name.is_absolute,
                                name.comps.len(),
                                name.comps.first()) {
-                        (false, 1, Some(&PathComp::Ident(name))) => {
+                        (false, 1, Some(&PathComp{ name, hint: None })) => {
                             match_eat!{ self.0;
                                 sym!("@") => {
                                     let pat = Box::new(self.eat_pat());
@@ -1062,9 +1073,171 @@ impl<'t> Parser<'t> {
     /// following TTs can be a item-like-expr, it will return immediately
     /// without checking binary ops. Eg. `m!{} - 1` will be parsed into `m!{}`
     /// and `-1` will be remained.
+    /// Reference:
+    /// http://doc.rust-lang.org/reference/expressions.html#operator-precedence
     fn eat_expr(&mut self, item_like_first: bool) -> Expr<'t> {
-        self.eat_expr_min();
-        unimplemented!()
+        self.eat_expr_binop(item_like_first)
+    }
+
+    /// Eat the cast expression maybe with binary operators.
+    /// See also: `Parser::eat_expr()`
+    fn eat_expr_binop(&mut self, item_like_first: bool) -> Expr<'t> {
+        let e0 = |p: &mut Self| p.eat_expr_cast(item_like_first);
+        macro_rules! m {
+            ([$($s:tt $lvl:tt $dt:tt $op:tt)*] $n:expr;) => {{
+                fn reduce(
+                    st_sym: &mut Vec<(BinaryOp, i8)>,
+                    st_expr: &mut Vec<Expr>,
+                    lvl: i8,
+                ) {
+                    loop {
+                        match st_sym.last() {
+                            Some(&(op, lvl_)) if lvl_ >= lvl => {
+                                let r = Box::new(st_expr.pop().unwrap());
+                                let l = Box::new(st_expr.pop().unwrap());
+                                st_expr.push(Expr::BinaryOp(op, l, r));
+                                st_sym.pop();
+                            },
+                            _ => break,
+                        }
+                    }
+                }
+                let mut st_sym: Vec<(BinaryOp, i8)> = vec![];
+                let mut st_expr = vec![e0(self)];
+                loop {
+                    match_eat!{ self.0;
+                        $(sym!($s) => {
+                            reduce(&mut st_sym, &mut st_expr, $lvl + $dt);
+                            st_sym.push((BinaryOp::$op, $lvl));
+                            st_expr.push(e0(self));
+                        },)*
+                        _ => break,
+                    }
+                }
+                reduce(&mut st_sym, &mut st_expr, 0);
+                assert_eq!(st_expr.len(), 1);
+                st_expr.pop().unwrap()
+            }};
+            ([$($to:tt)*] $i:expr; L: $($s:tt ($op:ident)),*; $($ti:tt)*) => {
+                m!([$($s $i 0 $op)* $($to)*] $i + 1; $($ti)*)
+            };
+            ([$($to:tt)*] $i:expr; R: $($s:tt ($op:ident)),*; $($ti:tt)*) => {
+                m!([$($s $i 1 $op)* $($to)*] $i + 1; $($ti)*)
+            };
+            ($($t:tt)*) => { m!([] 0; $($t)*) };
+        }
+        m!{
+            R: "="(Assign), "+="(AddAssign), "-="(SubAssign),
+                "*="(MulAssign), "/="(DivAssign), "%="(ModAssign),
+                "&="(AndAssign), "|="(OrAssign),
+                "<<="(ShlAssign), ">>="(ShrAssign);
+            R: "<-"(Place);
+            L: ".."(Range), "..."(RangeInclusive);
+            L: "||"(LogOr);
+            L: "&&"(LogAnd);
+            L: "=="(Equ), "!="(Ne),
+                "<"(Lt), ">"(Gt), "<="(Le), ">="(Ge);
+            L: "|"(Or);
+            L: "^"(Xor);
+            L: "&"(And);
+            L: "<<"(Shl), ">>"(Shr);
+            L: "+"(Add), "-"(Sub);
+            L: "*"(Mul), "/"(Div);
+        }
+    }
+
+    /// Eat the cast expression maybe with `as` or `:`.
+    /// See also: `Parser::eat_expr()`
+    fn eat_expr_cast(&mut self, item_like_first: bool) -> Expr<'t> {
+        let mut e = self.eat_expr_prefix(item_like_first);
+        if !(e.is_item_like() && item_like_first) {
+            loop {
+                match_eat!{ self.0;
+                    kw!("as") => e = Expr::As{
+                        expr: Box::new(e),
+                        ty: Box::new(self.eat_ty()),
+                    },
+                    sym!(":") => e = Expr::Colon{
+                        expr: Box::new(e),
+                        ty: Box::new(self.eat_ty()),
+                    },
+                    _ => break,
+                }
+            }
+        }
+        e
+    }
+
+    /// Eat the expression maybe with prefix operators.
+    /// See also: `Parser::eat_expr()`
+    fn eat_expr_prefix(&mut self, item_like_first: bool) -> Expr<'t> {
+        let op = match_eat!{ self.0;
+            sym!("-") => Some(UnaryOp::Neg),
+            sym!("!") => Some(UnaryOp::Not),
+            sym!("&") => Some(UnaryOp::Borrow),
+            sym!("&"), kw!("mut") => Some(UnaryOp::BorrowMut),
+            sym!("*") => Some(UnaryOp::Deref),
+            _ => None,
+        };
+        match op {
+            Some(op) => Expr::UnaryOp(
+                op,
+                Box::new(self.eat_expr_prefix(false),
+            )),
+            None => self.eat_expr_postfix(item_like_first),
+        }
+    }
+
+    /// Eat the expression maybe with postfix operators.
+    /// See also: `Parser::eat_expr()`
+    fn eat_expr_postfix(&mut self, item_like_first: bool) -> Expr<'t> {
+        let mut e = self.eat_expr_min();
+        if e.is_item_like() && item_like_first {
+            return e;
+        }
+        loop {
+            match_eat!{ self.0;
+                sym!("?") =>
+                    e = Expr::UnaryOp(UnaryOp::Try, Box::new(e)),
+                sym!("."), lit_int!(i) =>
+                    e = Expr::TupleField{ obj: Box::new(e), index: i },
+                sym!(".") => {
+                    let comp = self.eat_path_comp();
+                    match_eat!{ self.0;
+                        tree!(_, delim: Paren, tts) => {
+                            let (args, _) = Parser::new(tts)
+                                                   .eat_many_comma_tail_end(
+                                Expr::Unknow,
+                                |p| p.eat_expr(false),
+                            );
+                            e = Expr::MemberCall{
+                                obj: Box::new(e),
+                                func: comp,
+                                args,
+                            };
+                        },
+                        _ => e = Expr::StructField{
+                            obj: Box::new(e),
+                            field: comp,
+                        },
+                    }
+                },
+                tree!(_, delim: Bracket, tts) => {
+                    let mut p = Parser::new(tts);
+                    let index = Box::new(p.eat_expr(false));
+                    let unknow = p.rest();
+                    e = Expr::Index{ obj: Box::new(e), index, unknow };
+                },
+                tree!(_, delim: Paren, tts) => {
+                    let (args, _) = Parser::new(tts).eat_many_comma_tail_end(
+                        Expr::Unknow,
+                        |p| p.eat_expr(false),
+                    );
+                    e = Expr::Call{ func: Box::new(e), args };
+                },
+                _ => return e,
+            }
+        }
     }
 
     /// Eat and return a block expression, or return None.
