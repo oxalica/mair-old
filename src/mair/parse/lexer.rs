@@ -639,7 +639,7 @@ pub mod test { // pub for reuse
         assert_eq!(lex("1.2e-3"),       Ok(vec![(Literal(Lit::FloatLike{ ty: None, val: 1.2e-3 }), 0..6)]));
         assert_eq!(lex("1e+3"),         Ok(vec![(Literal(Lit::FloatLike{ ty: None, val: 1e3 }), 0..4)]));
         assert_eq!(lex("0xEf64"),       Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 0xEF64 }), 0..6)]));
-        assert_eq!(lex("0o__1_07f64"),  Ok(vec![(Literal(Lit::FloatLike{ ty: styf64.clone(), val: 0o107i32 as f64 }), 0..11)])); // TODO
+        assert_eq!(lex("0o__1_07f64"),  Ok(vec![(Literal(Lit::FloatLike{ ty: styf64.clone(), val: f64::from(0o107i32) }), 0..11)])); // TODO
         assert_eq!(lex("0b__1_01"),     Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 0b101 }), 0..8)]));
 
         assert_eq!(lex("0b21"),         Err(LexicalError{ pos: 0, kind: InvalidNumberSuffix })); // suffix match `b21` and fails
