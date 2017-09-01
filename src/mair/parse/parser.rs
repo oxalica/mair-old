@@ -1216,6 +1216,9 @@ impl<'t> Parser<'t> {
         item_like_first: bool,
         struct_expr: bool,
     ) -> Expr<'t> {
+        // TODO: should match over lots of operators
+        #![cfg_attr(feature="clippy", allow(cyclomatic_complexity))]
+
         let e0 = |p: &mut Self| p.eat_expr_cast(item_like_first, struct_expr);
         let efst = e0(self);
         if item_like_first && efst.is_item_like() {
@@ -1406,6 +1409,9 @@ impl<'t> Parser<'t> {
     /// If `struct_expr` is false, `S[<T>]{..}` will be cut and only `S` will
     /// be returned as a path.
     fn eat_expr_min(&mut self, struct_expr: bool) -> Expr<'t> {
+        // TODO:
+        #![cfg_attr(feature="clippy", allow(cyclomatic_complexity))]
+
         if let Some(p) = self.eat_opt_plugin_invoke() {
             return Expr::PluginInvoke(p);
         }
