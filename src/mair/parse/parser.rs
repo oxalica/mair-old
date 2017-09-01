@@ -297,18 +297,48 @@ impl<'t> Parser<'t> {
 
     /// Eat and return an identifier, or return the empty str slice after the
     /// last TT eaten.
-    fn eat_ident(&mut self) -> &'t str {
-        unimplemented!()
+    fn eat_ident(&mut self) -> Ident<'t> {
+        match_eat!{ self.0;
+            ident!(s) => Some(s),
+            _ => None,
+        }
     }
 
     /// Eat and return a Path.
     fn eat_path(&mut self) -> Path<'t> {
-        unimplemented!()
+        let is_absolute = match_eat!{ self.0;
+            sym!("::") => true,
+            _ => false,
+        };
+        let mut comps = vec![self.eat_path_comp()];
+        loop {
+            match_eat!{ self.0;
+                sym!("::") => comps.push(self.eat_path_comp()),
+                _ => break,
+            }
+        }
+        Path{ is_absolute, comps }
     }
 
     /// Eat and return a path component.
     fn eat_path_comp(&mut self) -> PathComp<'t> {
-        unimplemented!()
+        let name = self.eat_ident();
+        let hint = match_eat!{ self.0;
+            sym!("::"), sym!("<") => {
+                let (v, _) = self.eat_many_tail(
+                    symbol_type!(","),
+                    Parser::try_eat_templ_end,
+                    TyHintArg::Unknow,
+                    |p| match_eat!{ p.0;
+                        lt!(lt) => TyHintArg::Lifetime(lt),
+                        _ => TyHintArg::Ty(p.eat_ty()),
+                    },
+                );
+                Some(v)
+            },
+            _ => None,
+        };
+        PathComp{ name, hint }
     }
 
     /// Eat a semicolon, return whether it success.
@@ -353,18 +383,18 @@ impl<'t> Parser<'t> {
 
     /// Eat a valid meta, or return Meta::Null without consuming any TT.
     fn eat_meta(&mut self) -> Meta<'t> {
+        let name = self.eat_ident();
         match_eat!{ self.0;
-            ident!(key), sym!("="), lit!(value) =>
-                Meta::KeyValue{ key, value },
-            ident!(name), tree!(_, delim: Paren, tts) => {
+            sym!("="), lit!(value) =>
+                Meta::KeyValue{ key: name, value },
+            tree!(_, delim: Paren, tts) => {
                 let (subs, _) = Parser::new(tts).eat_many_comma_tail_end(
                     Meta::Unknow,
                     |p| p.eat_meta(),
                 );
                 Meta::Sub{ name, subs }
             },
-            ident!(s) => Meta::Flag(s),
-            _ => Meta::Null,
+            _ => Meta::Flag(name),
         }
     }
 
@@ -437,8 +467,9 @@ impl<'t> Parser<'t> {
         };
         let mut comps = vec![];
         loop {
+            comps.push(self.eat_ident());
             match_eat!{ self.0;
-                ident!(s), sym!("::") => comps.push(s),
+                sym!("::") => (),
                 _ => break,
             }
         }
@@ -454,7 +485,6 @@ impl<'t> Parser<'t> {
     fn eat_use_names(&mut self) -> Option<Vec<UseName<'t>>> {
         match_eat!{ self.0;
             sym!("*") => None,
-            ident!(name) => Some(vec![UseName::Name{ name, alias: None }]),
             tree!(_, delim: Brace, tts) => {
                 let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
                     UseName::Unknow,
@@ -469,7 +499,10 @@ impl<'t> Parser<'t> {
                 );
                 Some(v)
             },
-            _ => None,
+            _ => {
+                let name = self.eat_ident();
+                Some(vec![UseName::Name{ name, alias: None }])
+            },
         }
     }
 
@@ -766,14 +799,14 @@ impl<'t> Parser<'t> {
                 };
                 TemplArg::Lifetime{ name, bound }
             },
-            ident!(name) => {
+            _ => {
+                let name = self.eat_ident();
                 let bound = match_eat!{ self.0;
                     sym!(":") => Some(self.eat_ty()),
                     _ => None,
                 };
                 TemplArg::Ty{ name, bound }
             },
-            _ => TemplArg::Null,
         }
     }
 
@@ -1013,9 +1046,13 @@ impl<'t> Parser<'t> {
     fn eat_ty_apply_arg(&mut self) -> TyApplyArg<'t> {
         match_eat!{ self.0;
             lt!(lt) => TyApplyArg::Lifetime(lt),
+            sym!("=") => {
+                let ty = self.eat_ty();
+                TyApplyArg::AssocTy{ name: None, ty }
+            },
             ident!(name), sym!("=") => {
                 let ty = self.eat_ty();
-                TyApplyArg::AssocTy{ name, ty }
+                TyApplyArg::AssocTy{ name: Some(name), ty }
             },
             _ => TyApplyArg::Ty(self.eat_ty()),
         }
@@ -1035,7 +1072,7 @@ impl<'t> Parser<'t> {
                     },
                     |p| match_eat!{ p.0;
                         ident!(name), sym!(":") =>
-                            FuncTyParam::Param{ name: Some(name)
+                            FuncTyParam::Param{ name: Some(Some(name))
                                               , ty: p.eat_ty() },
                         _ => FuncTyParam::Param{ name: None
                                                , ty: p.eat_ty() },
@@ -1584,14 +1621,14 @@ impl<'t> Parser<'t> {
         match_eat!{ self.0;
             ident!(name), sym!("!") => {
                 let ident = match_eat!{ self.0;
-                    ident!(s) => Some(s),
+                    ident!(s) => Some(Some(s)),
                     _ => None,
                 };
                 let tt = match_eat!{ self.0;
                     t@tree!(_, ..) => Some(t),
                     _ => None,
                 };
-                Some(PluginInvoke{ name, ident, tt })
+                Some(PluginInvoke{ name: Some(name), ident, tt })
             },
             _ => None,
         }
@@ -1607,14 +1644,6 @@ mod test {
     fn tts(input: &str) -> Result<Vec<TT>, UnmatchedDelimError> {
         let ltoks = lex(input).unwrap();
         parse_tts(&ltoks)
-    }
-
-    macro_rules! parse_check {
-        ($s:expr, $f:ident, $ntt_rest:expr, $ret:expr) => {{
-            let mut p = Parser::new(tts($s).unwrap());
-            let r = p.$f();
-            assert_eq!((r, p.rest().len()), ($ret, $ntt_rest));
-        }};
     }
 
     #[test]
@@ -1647,25 +1676,5 @@ mod test {
         let ret = tts(&source);
         println!("{:?}", ret);
         assert!(ret.is_ok());
-    }
-
-    #[test]
-    fn parser_meta() {
-        let tok_dol = TTKind::Token(Tokk::Symbol(symbol_type!("$")));
-        parse_check!("", eat_meta, 0, Meta::Null);
-        parse_check!("a[]", eat_meta, 1, Meta::Flag("a"));
-        parse_check!("a(a=1,$$,,)", eat_meta, 0, Meta::Sub{
-            name: "a",
-            subs: vec![
-                Meta::KeyValue{
-                    key: "a",
-                    value: Literal::IntLike{ ty: None, val: 1 },
-                },
-                Meta::Null,
-                Meta::Unknow((tok_dol.clone(), 6..7)),
-                Meta::Unknow((tok_dol.clone(), 7..8)),
-                Meta::Null,
-            ],
-        });
     }
 }
