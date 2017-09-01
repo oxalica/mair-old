@@ -245,14 +245,32 @@ impl<'t> Parser<'t> {
             Some(&kw!("extern")) |
             Some(&kw!("use")) |
             Some(&kw!("mod")) |
-            Some(&kw!("fn")) | Some(&kw!("unsafe")) |
+            Some(&kw!("fn")) |
             Some(&kw!("type")) |
             Some(&kw!("struct")) |
             Some(&kw!("enum")) |
             Some(&kw!("const")) | Some(&kw!("static")) |
             Some(&kw!("trait")) |
-            Some(&kw!("impl")) |
-            Some(&ident!(_)) => // plugin invoke
+            Some(&kw!("impl")) =>
+                true,
+            Some(&kw!("unsafe")) => match self.0.peek(1) {
+                Some(&kw!("fn")) |
+                Some(&kw!("extern")) =>
+                    true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Return whether the next TT can be the start of a pattern.
+    fn is_pat_begin(&self) -> bool {
+        match self.0.peek(0) {
+            Some(&ident!(_)) |
+            Some(&sym!("::")) |
+            Some(&lit!(_)) |
+            Some(&kw!("ref")) | Some(&kw!("mut")) |
+            Some(&tree!(_, delim: Paren, ..)) =>
                 true,
             _ => false,
         }
@@ -262,6 +280,10 @@ impl<'t> Parser<'t> {
     fn is_expr_begin(&self) -> bool {
         match self.0.peek(0) {
             Some(&lit!(_)) |
+            Some(&kw!("unsafe")) |
+            Some(&kw!("super")) |
+            Some(&kw!("self")) |
+            Some(&kw!("Self")) | // Self{..}
             Some(&ident!(_)) | Some(&sym!("::")) |
             Some(&tree!(_, ..)) |
             Some(&sym!("-")) | Some(&sym!("!")) |
@@ -322,23 +344,29 @@ impl<'t> Parser<'t> {
 
     /// Eat and return a path component.
     fn eat_path_comp(&mut self) -> PathComp<'t> {
-        let name = self.eat_ident();
-        let hint = match_eat!{ self.0;
-            sym!("::"), sym!("<") => {
-                let (v, _) = self.eat_many_tail(
-                    symbol_type!(","),
-                    Parser::try_eat_templ_end,
-                    TyHintArg::Unknow,
-                    |p| match_eat!{ p.0;
-                        lt!(lt) => TyHintArg::Lifetime(lt),
-                        _ => TyHintArg::Ty(p.eat_ty()),
+        match_eat!{ self.0;
+            kw!("self") => PathComp::Self_,
+            kw!("super") => PathComp::Super,
+            _ => {
+                let name = self.eat_ident();
+                let hint = match_eat!{ self.0;
+                    sym!("::"), sym!("<") => {
+                        let (v, _) = self.eat_many_tail(
+                            symbol_type!(","),
+                            Parser::try_eat_templ_end,
+                            TyHintArg::Unknow,
+                            |p| match_eat!{ p.0;
+                                lt!(lt) => TyHintArg::Lifetime(lt),
+                                _ => TyHintArg::Ty(p.eat_ty(true)),
+                            },
+                        );
+                        Some(v)
                     },
-                );
-                Some(v)
+                    _ => None,
+                };
+                PathComp::Name{ name, hint }
             },
-            _ => None,
-        };
-        PathComp{ name, hint }
+        }
     }
 
     /// Eat a semicolon, return whether it success.
@@ -461,47 +489,61 @@ impl<'t> Parser<'t> {
 
     /// Eat the tail after `use`.
     fn eat_use_tail(&mut self) -> ItemKind<'t> {
-        match_eat!{ self.0; // `use` always uses absolute path
-            sym!("::") => (),
-            _ => (),
+        let is_absolute = match_eat!{ self.0;
+            sym!("::") => true,
+            _ => false,
         };
         let mut comps = vec![];
         loop {
-            comps.push(self.eat_ident());
             match_eat!{ self.0;
-                sym!("::") => (),
+                kw!("self"), sym!("::") =>
+                    comps.push(PathComp::Self_),
+                kw!("super"), sym!("::") =>
+                    comps.push(PathComp::Super),
+                ident!(name), sym!("::") =>
+                    comps.push(PathComp::Name{ name: Some(name), hint: None }),
+                sym!("::") =>
+                    comps.push(PathComp::Name{ name: None, hint: None }),
                 _ => break,
             }
         }
-        let opt_names = self.eat_use_names();
-        let semi = self.eat_semi();
-        match opt_names {
-            None => ItemKind::UseAll{ comps, semi },
-            Some(names) => ItemKind::UseSome{ comps, names, semi },
+        self.eat_use_names_tail(Path{ is_absolute, comps })
+    }
+
+    /// Eat the using names and semicolon in item `use`, return the ItemKind.
+    fn eat_use_names_tail(&mut self, path: Path<'t>) -> ItemKind<'t> {
+        match_eat!{ self.0;
+            sym!("*") => {
+                let semi = self.eat_semi();
+                ItemKind::UseAll{ path, semi }
+            },
+            tree!(_, delim: Brace, tts) => {
+                let (names, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    UseName::Unknow,
+                    Parser::eat_use_name,
+                );
+                let semi = self.eat_semi();
+                ItemKind::UseSome{ path, names, semi }
+            },
+            _ => {
+                let name = self.eat_use_name();
+                let semi = self.eat_semi();
+                ItemKind::UseOne{ path, name, semi }
+            },
         }
     }
 
-    /// Eat and return the using names in item `use`, return None if `*`.
-    fn eat_use_names(&mut self) -> Option<Vec<UseName<'t>>> {
+    /// Eat and return a UseName like `self` or `name [as alias]`.
+    fn eat_use_name(&mut self) -> UseName<'t> {
         match_eat!{ self.0;
-            sym!("*") => None,
-            tree!(_, delim: Brace, tts) => {
-                let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
-                    UseName::Unknow,
-                    |p| {
-                        let name = p.eat_ident();
-                        let alias = match_eat!{ p.0;
-                            kw!("as") => Some(p.eat_ident()),
-                            _ => None,
-                        };
-                        UseName::Name{ name, alias }
-                    },
-                );
-                Some(v)
-            },
+            kw!("self") => UseName::Self_,
             _ => {
                 let name = self.eat_ident();
-                Some(vec![UseName::Name{ name, alias: None }])
+                let alias = match_eat!{ self.0;
+                    kw!("as") => Some(self.eat_ident()),
+                    _ => None,
+                };
+                UseName::Name{ name, alias }
             },
         }
     }
@@ -532,7 +574,7 @@ impl<'t> Parser<'t> {
     fn eat_fn_sig(&mut self, is_unsafe: bool, abi: ABI) -> FuncSig<'t> {
         let name = self.eat_ident();
         let templ = self.eat_templ();
-        let (args, is_va, ret_ty, whs) = match_eat!{ self.0;
+        let (args, is_va) = match_eat!{ self.0;
             tree!(_, delim: Paren, tts) => {
                 let (args, va, _) = Parser::new(tts).eat_many_tail_last(
                     symbol_type!(","),
@@ -544,12 +586,12 @@ impl<'t> Parser<'t> {
                     },
                     Parser::eat_func_param,
                 );
-                let ret_ty = self.eat_opt_ret_ty();
-                let whs = self.eat_opt_whs();
-                (Some(args), va.is_some(), ret_ty, whs)
+                (Some(args), va.is_some())
             },
-            _ => (None, false, None, None),
+            _ => (None, false),
         };
+        let ret_ty = self.eat_opt_ret_ty();
+        let whs = self.eat_opt_whs();
         FuncSig{ is_unsafe, abi, name, templ, args, is_va, ret_ty, whs }
     }
 
@@ -561,7 +603,7 @@ impl<'t> Parser<'t> {
             sym!("&"), kw!("self") =>
                 FuncParam::SelfRef{ is_mut: false },
             kw!("self"), sym!(":") =>
-                FuncParam::SelfAs(self.eat_ty()),
+                FuncParam::SelfAs(self.eat_ty(true)),
             kw!("mut"), kw!("self") =>
                 FuncParam::SelfMove{ is_mut: true },
             kw!("self") =>
@@ -569,7 +611,7 @@ impl<'t> Parser<'t> {
             _ => {
                 let pat = self.eat_pat();
                 let ty = match_eat!{ self.0;
-                    sym!(":") => Some(Box::new(self.eat_ty())),
+                    sym!(":") => Some(Box::new(self.eat_ty(true))),
                     _ => None,
                 };
                 FuncParam::Bind{ pat, ty }
@@ -580,7 +622,7 @@ impl<'t> Parser<'t> {
     /// Eat the return type if the next TT is `->`, or return None.
     fn eat_opt_ret_ty(&mut self) -> Option<Box<Ty<'t>>> {
         match_eat!{ self.0;
-            sym!("->") => Some(Box::new(self.eat_ty())),
+            sym!("->") => Some(Box::new(self.eat_ty(true))),
             _ => None,
         }
     }
@@ -601,7 +643,7 @@ impl<'t> Parser<'t> {
         let templ = self.eat_templ();
         let whs = self.eat_opt_whs();
         let origin = match_eat!{ self.0;
-            sym!("=") => Some(Box::new(self.eat_ty())),
+            sym!("=") => Some(Box::new(self.eat_ty(true))),
             _ => None,
         };
         let semi = self.eat_semi();
@@ -637,7 +679,8 @@ impl<'t> Parser<'t> {
                 if let Some(fields) = opt_fields {
                     ItemKind::StructFields{ name, templ, whs, fields }
                 } else {
-                    ItemKind::StructUnit{ name, templ, whs }
+                    let semi = self.eat_semi();
+                    ItemKind::StructUnit{ name, templ, whs, semi }
                 }
             },
         }
@@ -650,7 +693,7 @@ impl<'t> Parser<'t> {
             kw!("pub") => true,
             _ => false,
         };
-        let ty = self.eat_ty();
+        let ty = self.eat_ty(true);
         StructTupleElem::Elem{ attrs, is_pub, ty }
     }
 
@@ -663,7 +706,7 @@ impl<'t> Parser<'t> {
         };
         let name = self.eat_ident();
         let ty = match_eat!{ self.0;
-            sym!(":") => Some(self.eat_ty()),
+            sym!(":") => Some(self.eat_ty(true)),
             _ => None,
         };
         StructField::Field{ attrs, is_pub, name, ty }
@@ -714,40 +757,42 @@ impl<'t> Parser<'t> {
     fn eat_const_static_tail(&mut self, is_static: bool) -> ItemKind<'t> {
         let name = self.eat_ident();
         let ty = match_eat!{ self.0;
-            sym!(":") => Some(Box::new(self.eat_ty())),
+            sym!(":") => Some(Box::new(self.eat_ty(true))),
             _ => None,
         };
         let val = match_eat!{ self.0;
-            sym!("=") => Some(Box::new(self.eat_expr(false))),
+            sym!("=") => Some(Box::new(self.eat_expr(false, true))),
             _ => None,
         };
+        let semi = self.eat_semi();
         if is_static {
-            ItemKind::Static{ name, ty, val }
+            ItemKind::Static{ name, ty, val, semi }
         } else {
-            ItemKind::Const{ name, ty, val }
+            ItemKind::Const{ name, ty, val, semi }
         }
     }
 
     /// Eat the tail after `trait`.
     fn eat_trait_tail(&mut self) -> ItemKind<'t> {
         let name = self.eat_ident();
+        let templ = self.eat_templ();
         let base = match_eat!{ self.0;
-            sym!(":") => Some(Box::new(self.eat_ty())),
+            sym!(":") => Some(Box::new(self.eat_ty(true))),
             _ => None,
         };
         let whs = self.eat_opt_whs();
         let inner = self.eat_opt_brace_mod();
-        ItemKind::Trait{ name, base, whs, inner }
+        ItemKind::Trait{ name, templ, base, whs, inner }
     }
 
     /// Eat the tail after `impl`.
     fn eat_impl_tail(&mut self) -> ItemKind<'t> {
         let templ = self.eat_templ();
-        let ty = Box::new(self.eat_ty());
+        let ty = Box::new(self.eat_ty(true));
         match_eat!{ self.0;
             kw!("for") => {
                 let tr = ty;
-                let ty = Box::new(self.eat_ty());
+                let ty = Box::new(self.eat_ty(true));
                 let whs = self.eat_opt_whs();
                 let inner = self.eat_opt_brace_mod();
                 ItemKind::ImplTrait{ templ, tr, ty, whs, inner }
@@ -802,7 +847,7 @@ impl<'t> Parser<'t> {
             _ => {
                 let name = self.eat_ident();
                 let bound = match_eat!{ self.0;
-                    sym!(":") => Some(self.eat_ty()),
+                    sym!(":") => Some(self.eat_ty(true)),
                     _ => None,
                 };
                 TemplArg::Ty{ name, bound }
@@ -815,7 +860,8 @@ impl<'t> Parser<'t> {
         self.eat_many_tail(
             symbol_type!("+"),
             |p| match p.0.peek(0) {
-                Some(&lt!(_)) => false,
+                Some(&lt!(_)) |
+                Some(&sym!("+")) => false,
                 _ => true,
             },
             |_| unreachable!(),  // if the next TT is not a lifetime, `end`
@@ -858,9 +904,9 @@ impl<'t> Parser<'t> {
                 Restrict::LifeBound{ lt, bound }
             },
             _ => {
-                let ty = self.eat_ty();
+                let ty = self.eat_ty(true);
                 let bound = match_eat!{ self.0;
-                    sym!(":") => Some(self.eat_ty()),
+                    sym!(":") => Some(self.eat_ty(true)),
                     _ => None,
                 };
                 Restrict::TraitBound{ ty, bound }
@@ -891,42 +937,60 @@ impl<'t> Parser<'t> {
                 }
             },
             _ => {
-                let name = self.eat_path();
-                match_eat!{ self.0;
-                    tree!(_, delim: Paren, tts) => {
-                        let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
-                            Pat::Unknow,
-                            Parser::eat_pat,
-                        );
-                        Pat::DestructTuple{ name, elems: v }
-                    },
-                    tree!(_, delim: Brace, mut tts) => {
-                        let ellipsis = match tts.last() {
-                            Some(&sym!("..")) => true,
-                            _ => false,
-                        };
-                        if ellipsis { tts.pop(); }
-                        let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
-                            DestructField::Unknow,
-                            Parser::eat_destruct_field,
-                        );
-                        Pat::DestructNormal{ name, fields: v, ellipsis }
-                    },
-                    _ => match (name.is_absolute,
-                               name.comps.len(),
-                               name.comps.first()) {
-                        (false, 1, Some(&PathComp{ name, hint: None })) => {
-                            match_eat!{ self.0;
-                                sym!("@") => {
-                                    let pat = Box::new(self.eat_pat());
-                                    Pat::Bind{ name, pat }
-                                },
-                                _ => Pat::AmbigVar(name),
-                            }
-                        },
-                        _ => Pat::Path(name),
-                    },
+                let is_ref = match_eat!{ self.0;
+                    kw!("ref") => true,
+                    _ => false,
+                };
+                let is_mut = match_eat!{ self.0;
+                    kw!("mut") => true,
+                    _ => false,
+                };
+                if is_ref || is_mut {
+                    let name = self.eat_ident();
+                    let pat = match_eat!{ self.0;
+                        sym!("@") => Some(Box::new(self.eat_pat())),
+                        _ => None,
+                    };
+                    Pat::BindLike{ name, is_ref, is_mut, pat }
+                } else {
+                    self.eat_pat_pathy()
                 }
+            },
+        }
+    }
+
+    /// Eat a pattern starting with an identifier,
+    fn eat_pat_pathy(&mut self) -> Pat<'t> {
+        let name = self.eat_path();
+        match_eat!{ self.0;
+            tree!(_, delim: Paren, tts) => {
+                let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    Pat::Unknow,
+                    Parser::eat_pat,
+                );
+                Pat::DestructTuple{ name, elems: v }
+            },
+            tree!(_, delim: Brace, mut tts) => {
+                let ellipsis = match tts.last() {
+                    Some(&sym!("..")) => true,
+                    _ => false,
+                };
+                if ellipsis { tts.pop(); }
+                let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    DestructField::Unknow,
+                    Parser::eat_destruct_field,
+                );
+                Pat::DestructNormal{ name, fields: v, ellipsis }
+            },
+            _ => if let (false, 1, Some(&PathComp::Name{ name, hint: None })) =
+                    (name.is_absolute, name.comps.len(), name.comps.first()) {
+                let pat = match_eat!{ self.0;
+                    sym!("@") => Some(Box::new(self.eat_pat())),
+                    _ => None,
+                };
+                Pat::BindLike{ name, is_ref: false, is_mut: false, pat }
+            } else {
+                Pat::Path(name)
             },
         }
     }
@@ -941,15 +1005,17 @@ impl<'t> Parser<'t> {
         DestructField::Field{ name, pat }
     }
 
-    /// Eat and return a type.
-    fn eat_ty(&mut self) -> Ty<'t> {
+    /// Eat and return a type. If `accect_traits`, it can accept
+    /// `Tr1 + Tr2 + ..`.
+    fn eat_ty(&mut self, accept_traits: bool) -> Ty<'t> {
         match_eat!{ self.0;
             ident!("_") => Ty::Hole,
             sym!("!") => Ty::Never,
+            kw!("Self") => Ty::Self_,
             tree!(_, delim: Paren, tts) => {
                 let (mut v, tail) = Parser::new(tts).eat_many_comma_tail_end(
                     Ty::Unknow,
-                    Parser::eat_ty,
+                    |p| p.eat_ty(true),
                 );
                 if v.len() == 1 && !tail {
                     Ty::Paren(Box::new(v.pop().unwrap()))
@@ -959,10 +1025,10 @@ impl<'t> Parser<'t> {
             },
             tree!(_, delim: Bracket, tts) => {
                 let mut p = Parser::new(tts);
-                let ty = Box::new(p.eat_ty());
+                let ty = Box::new(p.eat_ty(true));
                 match_eat!{ p.0;
                     sym!(";") => {
-                        let size = Box::new(p.eat_expr(false));
+                        let size = Box::new(p.eat_expr(false, true));
                         Ty::Array{ ty, size, unknow: p.rest() }
                     },
                     _ => Ty::Slice{ ty, unknow: p.rest() },
@@ -977,13 +1043,13 @@ impl<'t> Parser<'t> {
                     kw!("mut") => true,
                     _ => false,
                 };
-                let ty = Box::new(self.eat_ty());
+                let ty = Box::new(self.eat_ty(false));
                 Ty::Ref{ lt, is_mut, ty }
             },
             sym!("*"), kw!("const") =>
-                Ty::Ptr{ is_mut: false, ty: Box::new(self.eat_ty()) },
+                Ty::Ptr{ is_mut: false, ty: Box::new(self.eat_ty(false)) },
             sym!("*"), kw!("mut") =>
-                Ty::Ptr{ is_mut: true, ty: Box::new(self.eat_ty()) },
+                Ty::Ptr{ is_mut: true, ty: Box::new(self.eat_ty(false)) },
             kw!("fn") =>
                 self.eat_func_ty(false, ABI::Normal),
             kw!("extern"), kw!("fn") =>
@@ -996,10 +1062,13 @@ impl<'t> Parser<'t> {
                 self.eat_func_ty(true, ABI::Extern),
             kw!("unsafe"), kw!("extern"), lit_str!(abi), kw!("fn") =>
                 self.eat_func_ty(true, ABI::Specific(abi)),
-            _ => {
+            _ => if accept_traits {
                 let (mut v, tail) = self.eat_many_tail(
                     symbol_type!("+"),
-                    |p| !p.is_ty_apply_begin(),
+                    |p| match p.0.peek(0) {
+                        Some(&sym!("+")) => false,
+                        _ => !p.is_ty_apply_begin()
+                    },
                     TyApply::Unknow,
                     Parser::eat_ty_apply,
                 );
@@ -1008,6 +1077,10 @@ impl<'t> Parser<'t> {
                 } else {
                     Ty::Traits(v)
                 }
+            } else if self.is_ty_apply_begin() {
+                Ty::Apply(Box::new(self.eat_ty_apply()))
+            } else {
+                Ty::Traits(vec![]) // indicates null
             },
         }
     }
@@ -1022,11 +1095,10 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// Eat and return a simple type or applicated type. It always returns a
-    /// `TyApply::Apply`.
-    fn eat_ty_apply(&mut self) -> TyApply<'t> {
-        let name = self.eat_path();
-        let args = match_eat!{ self.0;
+    /// Eat and return a simple type or angle applicated type. It always
+    /// returns a `TyApply::Apply`.
+    fn eat_opt_angle_ty_apply_args(&mut self) -> Option<Vec<TyApplyArg<'t>>> {
+        match_eat!{ self.0;
             sym!("<") => {
                 let (args, _) = self.eat_many_tail(
                     symbol_type!(","),
@@ -1037,8 +1109,26 @@ impl<'t> Parser<'t> {
                 Some(args)
             },
             _ => None,
-        };
-        TyApply::Apply{ name, args }
+        }
+    }
+
+
+    fn eat_ty_apply(&mut self) -> TyApply<'t> {
+        let name = self.eat_path();
+        match_eat!{ self.0;
+            tree!(_, delim: Paren, tts) => {
+                let (args, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    Ty::Unknow,
+                    |p| p.eat_ty(true),
+                );
+                let ret_ty = self.eat_opt_ret_ty();
+                TyApply::Paren{ name, args, ret_ty }
+            },
+            _ => {
+                let args = self.eat_opt_angle_ty_apply_args();
+                TyApply::Angle{ name, args }
+            },
+        }
     }
 
     /// Eat and return an argument of parameterized generic type, one of the
@@ -1047,20 +1137,20 @@ impl<'t> Parser<'t> {
         match_eat!{ self.0;
             lt!(lt) => TyApplyArg::Lifetime(lt),
             sym!("=") => {
-                let ty = self.eat_ty();
+                let ty = self.eat_ty(true);
                 TyApplyArg::AssocTy{ name: None, ty }
             },
             ident!(name), sym!("=") => {
-                let ty = self.eat_ty();
+                let ty = self.eat_ty(true);
                 TyApplyArg::AssocTy{ name: Some(name), ty }
             },
-            _ => TyApplyArg::Ty(self.eat_ty()),
+            _ => TyApplyArg::Ty(self.eat_ty(true)),
         }
     }
 
     /// Eat the tail (after `fn`) and return a function type.
     fn eat_func_ty(&mut self, is_unsafe: bool, abi: ABI) -> Ty<'t> {
-        let (args, is_va, ret_ty) = match_eat!{ self.0;
+        let (args, is_va) = match_eat!{ self.0;
             tree!(_, delim: Paren, tts) => {
                 let (args, va, _) = Parser::new(tts).eat_many_tail_last(
                     symbol_type!(","),
@@ -1073,16 +1163,16 @@ impl<'t> Parser<'t> {
                     |p| match_eat!{ p.0;
                         ident!(name), sym!(":") =>
                             FuncTyParam::Param{ name: Some(Some(name))
-                                              , ty: p.eat_ty() },
+                                              , ty: p.eat_ty(true) },
                         _ => FuncTyParam::Param{ name: None
-                                               , ty: p.eat_ty() },
+                                               , ty: p.eat_ty(true) },
                     },
                 );
-                let ret_ty = self.eat_opt_ret_ty();
-                (Some(args), va.is_some(), ret_ty)
+                (Some(args), va.is_some())
             },
-            _ => (None, false, None),
+            _ => (None, false),
         };
+        let ret_ty = self.eat_opt_ret_ty();
         let fun_ty = FuncTy{
             is_unsafe,
             abi,
@@ -1095,33 +1185,44 @@ impl<'t> Parser<'t> {
 
     /// If the next TT can be the start of expression, eat and return the boxed
     /// expression. Otherwise, return None.
-    fn eat_opt_boxed_expr(
-        &mut self,
-        item_like_first: bool,
-    ) -> Option<Box<Expr<'t>>> {
+    fn eat_opt_boxed_expr(&mut self) -> Option<Box<Expr<'t>>> {
         if self.is_expr_begin() {
-            Some(Box::new(self.eat_expr(item_like_first)))
+            Some(Box::new(self.eat_expr(false, true)))
         } else {
             None
         }
     }
 
-    /// Eat and return an expression. If `item_like_first` is true and the
-    /// following TTs can be a item-like-expr, it will return immediately
-    /// without checking binary ops. Eg. `m!{} - 1` will be parsed into `m!{}`
-    /// and `-1` will be remained.
+    /// Eat and return an expression.
+    /// If `item_like_first` is true and the following TTs can be an
+    /// item-like-expr, it will return immediately without checking binary ops.
+    /// Eg. `m!{} - 1` will be parsed into `m!{}` and `-1` will be remained.
+    /// If `struct_expr` is false, it will not recognize struct expression
+    /// `S [<T, ..>] { .. }`。
     /// Reference:
     /// http://doc.rust-lang.org/reference/expressions.html#operator-precedence
-    fn eat_expr(&mut self, item_like_first: bool) -> Expr<'t> {
-        self.eat_expr_binop(item_like_first)
+    fn eat_expr(
+        &mut self,
+        item_like_first: bool,
+        struct_expr: bool,
+    ) -> Expr<'t> {
+        self.eat_expr_binop(item_like_first, struct_expr)
     }
 
     /// Eat the cast expression maybe with binary operators.
     /// See also: `Parser::eat_expr()`
-    fn eat_expr_binop(&mut self, item_like_first: bool) -> Expr<'t> {
-        let e0 = |p: &mut Self| p.eat_expr_cast(item_like_first);
+    fn eat_expr_binop(
+        &mut self,
+        item_like_first: bool,
+        struct_expr: bool,
+    ) -> Expr<'t> {
+        let e0 = |p: &mut Self| p.eat_expr_cast(item_like_first, struct_expr);
+        let efst = e0(self);
+        if item_like_first && efst.is_item_like() {
+            return efst;
+        }
         macro_rules! m {
-            ([$($s:tt $lvl:tt $dt:tt $op:tt)*] $n:expr;) => {{
+            ([$($s:tt $lvl:tt $dt:tt $op:tt)*] $n:expr; @ $efst:expr) => {{
                 fn reduce(
                     st_sym: &mut Vec<(BinaryOp, i8)>,
                     st_expr: &mut Vec<Expr>,
@@ -1140,7 +1241,7 @@ impl<'t> Parser<'t> {
                     }
                 }
                 let mut st_sym: Vec<(BinaryOp, i8)> = vec![];
-                let mut st_expr = vec![e0(self)];
+                let mut st_expr = vec![$efst];
                 loop {
                     match_eat!{ self.0;
                         $(sym!($s) => {
@@ -1161,9 +1262,9 @@ impl<'t> Parser<'t> {
             ([$($to:tt)*] $i:expr; R: $($s:tt ($op:ident)),*; $($ti:tt)*) => {
                 m!([$($s $i 1 $op)* $($to)*] $i + 1; $($ti)*)
             };
-            ($($t:tt)*) => { m!([] 0; $($t)*) };
+            ($efst:expr; $($t:tt)*) => { m!([] 0; $($t)* @ $efst) };
         }
-        m!{
+        m!{ efst;
             R: "="(Assign), "+="(AddAssign), "-="(SubAssign),
                 "*="(MulAssign), "/="(DivAssign), "%="(ModAssign),
                 "&="(AndAssign), "|="(OrAssign),
@@ -1185,18 +1286,22 @@ impl<'t> Parser<'t> {
 
     /// Eat the cast expression maybe with `as` or `:`.
     /// See also: `Parser::eat_expr()`
-    fn eat_expr_cast(&mut self, item_like_first: bool) -> Expr<'t> {
-        let mut e = self.eat_expr_prefix(item_like_first);
+    fn eat_expr_cast(
+        &mut self,
+        item_like_first: bool,
+        struct_expr: bool,
+    ) -> Expr<'t> {
+        let mut e = self.eat_expr_prefix(item_like_first, struct_expr);
         if !(e.is_item_like() && item_like_first) {
             loop {
                 match_eat!{ self.0;
                     kw!("as") => e = Expr::As{
                         expr: Box::new(e),
-                        ty: Box::new(self.eat_ty()),
+                        ty: Box::new(self.eat_ty(false)),
                     },
                     sym!(":") => e = Expr::Colon{
                         expr: Box::new(e),
-                        ty: Box::new(self.eat_ty()),
+                        ty: Box::new(self.eat_ty(false)),
                     },
                     _ => break,
                 }
@@ -1207,28 +1312,36 @@ impl<'t> Parser<'t> {
 
     /// Eat the expression maybe with prefix operators.
     /// See also: `Parser::eat_expr()`
-    fn eat_expr_prefix(&mut self, item_like_first: bool) -> Expr<'t> {
+    fn eat_expr_prefix(
+        &mut self,
+        item_like_first: bool,
+        struct_expr: bool,
+    ) -> Expr<'t> {
         let op = match_eat!{ self.0;
             sym!("-") => Some(UnaryOp::Neg),
             sym!("!") => Some(UnaryOp::Not),
-            sym!("&") => Some(UnaryOp::Borrow),
             sym!("&"), kw!("mut") => Some(UnaryOp::BorrowMut),
+            sym!("&") => Some(UnaryOp::Borrow),
             sym!("*") => Some(UnaryOp::Deref),
             _ => None,
         };
         match op {
             Some(op) => Expr::UnaryOp(
                 op,
-                Box::new(self.eat_expr_prefix(false),
+                Box::new(self.eat_expr_prefix(false, struct_expr),
             )),
-            None => self.eat_expr_postfix(item_like_first),
+            None => self.eat_expr_postfix(item_like_first, struct_expr),
         }
     }
 
     /// Eat the expression maybe with postfix operators.
     /// See also: `Parser::eat_expr()`
-    fn eat_expr_postfix(&mut self, item_like_first: bool) -> Expr<'t> {
-        let mut e = self.eat_expr_min();
+    fn eat_expr_postfix(
+        &mut self,
+        item_like_first: bool,
+        struct_expr: bool,
+    ) -> Expr<'t> {
+        let mut e = self.eat_expr_min(struct_expr);
         if e.is_item_like() && item_like_first {
             return e;
         }
@@ -1245,7 +1358,7 @@ impl<'t> Parser<'t> {
                             let (args, _) = Parser::new(tts)
                                                    .eat_many_comma_tail_end(
                                 Expr::Unknow,
-                                |p| p.eat_expr(false),
+                                |p| p.eat_expr(false, true),
                             );
                             e = Expr::MemberCall{
                                 obj: Box::new(e),
@@ -1261,14 +1374,14 @@ impl<'t> Parser<'t> {
                 },
                 tree!(_, delim: Bracket, tts) => {
                     let mut p = Parser::new(tts);
-                    let index = Box::new(p.eat_expr(false));
+                    let index = Box::new(p.eat_expr(false, true));
                     let unknow = p.rest();
                     e = Expr::Index{ obj: Box::new(e), index, unknow };
                 },
                 tree!(_, delim: Paren, tts) => {
                     let (args, _) = Parser::new(tts).eat_many_comma_tail_end(
                         Expr::Unknow,
-                        |p| p.eat_expr(false),
+                        |p| p.eat_expr(false, true),
                     );
                     e = Expr::Call{ func: Box::new(e), args };
                 },
@@ -1290,7 +1403,9 @@ impl<'t> Parser<'t> {
     /// returns an expression of unary/binary operator.
     /// Warning: struct expression is an expression element, but (member)
     /// function call is not.
-    fn eat_expr_min(&mut self) -> Expr<'t> {
+    /// If `struct_expr` is false, `S[<T>]{..}` will be cut and only `S` will
+    /// be returned as a path.
+    fn eat_expr_min(&mut self, struct_expr: bool) -> Expr<'t> {
         if let Some(p) = self.eat_opt_plugin_invoke() {
             return Expr::PluginInvoke(p);
         }
@@ -1299,7 +1414,7 @@ impl<'t> Parser<'t> {
             tree!(_, delim: Paren, tts) => {
                 let (mut v, tail) = Parser::new(tts).eat_many_comma_tail_end(
                     Expr::Unknow,
-                    |p| p.eat_expr(false),
+                    |p| p.eat_expr(false, true),
                 );
                 if v.len() == 1 && !tail {
                     Expr::Paren(Box::new(v.pop().unwrap()))
@@ -1307,52 +1422,50 @@ impl<'t> Parser<'t> {
                     Expr::Tuple(v)
                 }
             },
-            tree!(_, delim: Brace, tts) =>
-                Parser::new(tts).eat_block_expr_inner_end(),
             tree!(_, delim: Bracket, tts) =>
                 Parser::new(tts).eat_array_expr_inner_end(),
+            tree!(_, delim: Brace, tts) =>
+                Parser::new(tts).eat_block_expr_inner_end(),
+            kw!("unsafe") =>
+                Expr::Unsafe(self.eat_opt_block_expr().map(Box::new)),
             sym!("|") => self.eat_lambda_expr_tail(false, false),
             sym!("||") => self.eat_lambda_expr_tail(false, true),
             kw!("move"), sym!("|") => self.eat_lambda_expr_tail(true, false),
             kw!("move"), sym!("||") => self.eat_lambda_expr_tail(true, true),
             kw!("break"), lt!(lt) =>
                 Expr::Break{ label: Some(lt)
-                           , expr: self.eat_opt_boxed_expr(false) },
+                           , expr: self.eat_opt_boxed_expr() },
             kw!("break") =>
                 Expr::Break{ label: None
-                           , expr: self.eat_opt_boxed_expr(false) },
+                           , expr: self.eat_opt_boxed_expr() },
             kw!("continue"), lt!(lt) =>
                 Expr::Continue{ label: Some(lt) },
             kw!("continue") =>
                 Expr::Continue{ label: None },
-            kw!("return") => Expr::Return(self.eat_opt_boxed_expr(false)),
-            lt!(lt), kw!("loop") => self.eat_loop_tail(Some(lt)),
+            kw!("return") => Expr::Return(self.eat_opt_boxed_expr()),
+            lt!(lt), sym!(":"), kw!("loop") => self.eat_loop_tail(Some(lt)),
             kw!("loop") => self.eat_loop_tail(None),
-            lt!(lt), kw!("while") => self.eat_while_tail(Some(lt)),
+            lt!(lt), sym!(":"), kw!("while") => self.eat_while_tail(Some(lt)),
             kw!("while") => self.eat_while_tail(None),
-            lt!(lt), kw!("for") => self.eat_for_tail(Some(lt)),
+            lt!(lt), sym!(":"), kw!("for") => self.eat_for_tail(Some(lt)),
             kw!("for") => self.eat_for_tail(None),
             kw!("if") => self.eat_if_tail(),
             kw!("match") => self.eat_match_tail(),
             _ => {
-                let (name, args) = match self.eat_ty_apply() {
-                    TyApply::Apply{ name, args } => (name, args),
-                    _ => unreachable!(),
-                };
-                let opt_struct = match_eat!{ self.0;
-                    tree!(_, delim: Brace, tts) => {
-                        let (fields, base) =
-                            Parser::new(tts).eat_expr_struct_inner_end();
-                        Some((Some(fields), base))
-                    },
-                    _ => if args.is_some() { Some((None, None)) }
-                         else { None },
-                };
+                let name = self.eat_path();
+                let opt_struct = if struct_expr {
+                    match_eat!{ self.0;
+                        tree!(_, delim: Brace, tts) => {
+                            let (fields, base) =
+                                Parser::new(tts).eat_expr_struct_inner_end();
+                            Some((Some(fields), base))
+                        },
+                        _ => None,
+                    }
+                } else { None };
                 match opt_struct {
                     Some((fields, base)) => Expr::Struct{
-                        ty: Box::new(Ty::Apply(Box::new(
-                            TyApply::Apply{ name, args }
-                        ))),
+                        ty: Box::new(Ty::from_path(name)),
                         fields,
                         base,
                     },
@@ -1374,14 +1487,14 @@ impl<'t> Parser<'t> {
             kw!("let") => {
                 let pat = Box::new(self.eat_pat());
                 let expr = match_eat!{ self.0;
-                    sym!("=") => Some(Box::new(self.eat_expr(false))),
+                    sym!("=") => Some(Box::new(self.eat_expr(false, false))),
                     _ => None,
                 };
                 let body = self.eat_opt_block_expr().map(Box::new);
                 Expr::WhileLet{ pat, expr, body }
             },
             _ => {
-                let cond = Box::new(self.eat_expr(false));
+                let cond = Box::new(self.eat_expr(false, false));
                 let body = self.eat_opt_block_expr().map(Box::new);
                 Expr::While{ label, cond, body }
             },
@@ -1392,7 +1505,7 @@ impl<'t> Parser<'t> {
     fn eat_for_tail(&mut self, label: Option<Lifetime<'t>>) -> Expr<'t> {
         let pat = Box::new(self.eat_pat());
         let iter = match_eat!{ self.0;
-            kw!("in") => Some(Box::new(self.eat_expr(false))),
+            kw!("in") => Some(Box::new(self.eat_expr(false, false))),
             _ => None,
         };
         let body = self.eat_opt_block_expr().map(Box::new);
@@ -1416,14 +1529,14 @@ impl<'t> Parser<'t> {
             kw!("let") => {
                 let pat = Box::new(self.eat_pat());
                 let match_expr = match_eat!{ self.0;
-                    sym!("=") => Some(Box::new(self.eat_expr(false))),
+                    sym!("=") => Some(Box::new(self.eat_expr(false, false))),
                     _ => None,
                 };
                 let (then_expr, else_expr) = then_else(self);
                 Expr::IfLet{ pat, match_expr, then_expr, else_expr }
             },
             _ => {
-                let cond = Box::new(self.eat_expr(false));
+                let cond = Box::new(self.eat_expr(false, false));
                 let (then_expr, else_expr) = then_else(self);
                 Expr::If{ cond, then_expr, else_expr }
             },
@@ -1432,7 +1545,7 @@ impl<'t> Parser<'t> {
 
     /// Eat and return the match expression after `match`.
     fn eat_match_tail(&mut self) -> Expr<'t> {
-        let expr = Box::new(self.eat_expr(false));
+        let expr = Box::new(self.eat_expr(false, false));
         let arms = match_eat!{ self.0;
             tree!(_, delim: Brace, tts) => {
                 let (arms, _) = Parser::new(tts).eat_many_comma_tail_end(
@@ -1441,19 +1554,19 @@ impl<'t> Parser<'t> {
                         let pats = p.eat_many_sep(
                             symbol_type!("|"),
                             |p| match p.0.peek(0) {
-                                Some(&sym!("=>")) |
-                                Some(&kw!("if")) => true,
-                                _ => false,
+                                Some(&sym!("|")) => false,
+                                _ => !p.is_pat_begin(),
                             },
                             Pat::Unknow,
                             Parser::eat_pat,
                         );
                         let cond = match_eat!{ p.0;
-                            kw!("if") => Some(Box::new(p.eat_expr(false))),
+                            kw!("if") =>
+                                Some(Box::new(p.eat_expr(false, true))),
                             _ => None,
                         };
                         let expr = match_eat!{ p.0;
-                            sym!("=>") => Some(p.eat_expr(false)),
+                            sym!("=>") => Some(p.eat_expr(false, true)),
                             _ => None,
                         };
                         MatchArm::Arm{ pats, cond, expr }
@@ -1480,34 +1593,40 @@ impl<'t> Parser<'t> {
                 };
                 stmts.push(stmt);
             }
-            if let Some(p) = self.eat_opt_plugin_invoke() {
-                match_eat!{ self.0;
-                    sym!(";") =>
-                        stmts.push(Stmt::PluginInvoke{ p, semi: true }),
-                    _ => ret = Some(Expr::PluginInvoke(p)),
-                }
-            } else if self.is_item_begin() {
+            if self.is_item_begin() {
                 stmts.push(Stmt::Item(Box::new(self.eat_item())));
             } else { match_eat!{ self.0;
                 kw!("let") => {
                     let pat = self.eat_pat();
                     let ty = match_eat!{ self.0;
-                        sym!(":") => Some(Box::new(self.eat_ty())),
+                        sym!(":") => Some(Box::new(self.eat_ty(true))),
                         _ => None,
                     };
                     let expr = match_eat!{ self.0;
-                        sym!("=") => Some(Box::new(self.eat_expr(false))),
+                        sym!("=") =>
+                            Some(Box::new(self.eat_expr(false, true))),
                         _ => None,
                     };
                     let semi = self.eat_semi();
                     stmts.push(Stmt::Let{ pat, ty, expr, semi });
                 },
-                _ => {
-                    let expr = self.eat_expr(true);
-                    if self.eat_semi() {
-                        stmts.push(Stmt::Expr{ expr, semi: true });
-                    } else {
-                        ret = Some(expr);
+                _ => if self.is_expr_begin() {
+                    let expr = self.eat_expr(true, true);
+                    let semi = self.eat_semi();
+                    match (expr, semi) {
+                        (Expr::PluginInvoke(p), true) =>
+                            stmts.push(Stmt::PluginInvoke{ p, semi: true }),
+                        (Expr::PluginInvoke(p), false) =>
+                            ret = Some(Expr::PluginInvoke(p)),
+                        (expr, true) =>
+                            stmts.push(Stmt::Expr{ expr, semi: true }),
+                        (expr, false) =>
+                            ret = Some(expr),
+                    }
+                } else {
+                    match_eat!{ self.0;
+                        tt => stmts.push(Stmt::Unknow(tt)),
+                        _ => unreachable!(), // not `is_end()`
                     }
                 },
             }}
@@ -1518,11 +1637,11 @@ impl<'t> Parser<'t> {
     /// Eat the inner of a array literal or filled array to the end, and return
     /// the Expr::ArrayFill or Expr::ArrayLit.
     fn eat_array_expr_inner_end(mut self) -> Expr<'t> {
-        let e0 = self.eat_expr(false);
+        let e0 = self.eat_expr(false, true);
         match_eat!{ self.0;
             sym!(";") => {
                 let elem = Box::new(e0);
-                let len = Box::new(self.eat_expr(false));
+                let len = Box::new(self.eat_expr(false, true));
                 Expr::ArrayFill{ elem, len, unknow: self.rest() }
             },
             _ => {
@@ -1532,7 +1651,7 @@ impl<'t> Parser<'t> {
                 };
                 let (mut elems, _) = self.eat_many_comma_tail_end(
                     Expr::Unknow,
-                    |p| p.eat_expr(false),
+                    |p| p.eat_expr(false, true),
                 );
                 elems.insert(0, e0);
                 Expr::ArrayLit(elems)
@@ -1569,12 +1688,12 @@ impl<'t> Parser<'t> {
         };
         let (ret_ty, body) = match_eat!{ self.0;
             sym!("->") => (
-                Some(Box::new(self.eat_ty())),
+                Some(Box::new(self.eat_ty(true))),
                 self.eat_opt_block_expr().map(Box::new),
             ),
             _ => (
                 None,
-                Some(Box::new(self.eat_expr(false))),
+                Some(Box::new(self.eat_expr(false, true))),
             ),
         };
         let sig = Box::new(LambdaSig{ args, ret_ty });
@@ -1585,7 +1704,7 @@ impl<'t> Parser<'t> {
     fn eat_lambda_param(&mut self) -> FuncParam<'t> {
         let pat = self.eat_pat();
         let ty = match_eat!{ self.0;
-            sym!(":") => Some(Box::new(self.eat_ty())),
+            sym!(":") => Some(Box::new(self.eat_ty(true))),
             _ => None,
         };
         FuncParam::Bind{ pat, ty }
@@ -1601,13 +1720,13 @@ impl<'t> Parser<'t> {
             |p| p.is_end(),
             ExprStructField::Unknow,
             |p| match_eat!{ p.0;
-                sym!("..") => Some(Box::new(p.eat_expr(false))),
+                sym!("..") => Some(Box::new(p.eat_expr(false, true))),
                 _ => None,
             },
             |p| {
                 let name = p.eat_ident();
                 let expr = match_eat!{ p.0;
-                    sym!(":") => Some(Box::new(p.eat_expr(false))),
+                    sym!(":") => Some(Box::new(p.eat_expr(false, true))),
                     _ => None,
                 };
                 ExprStructField::Field{ name, expr }
