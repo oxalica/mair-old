@@ -460,7 +460,13 @@ impl<'input> Iterator for Tokenizer<'input> {
                     m if is("line_outerdoc")        => Some(OuterDoc(&m[3..])),
                     _ if is("line_comment")         => None,
                     m if is("lifetime")             => Some(Lifetime(&m[1..])),
-                    m if is("keyword")              => Some(Keyword(KEYWORDS[m])),
+                    m if is("keyword")              => if m == "true" {
+                        Some(Literal(Lit::Bool(true)))
+                    } else if m == "false" {
+                        Some(Literal(Lit::Bool(false)))
+                    } else {
+                        Some(Keyword(KEYWORDS[m]))
+                    },
                     m if is("ident")                => Some(Ident(m)),
                     _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
                     _ if is("char")                 => Some(Literal(parse_cap_char(&cap)?)),
