@@ -398,17 +398,19 @@ fn parse_cap_num<'a>(cap: &Captures<'a>) -> Result<Lit<'a>, LexicalErrorKind> {
             let ty_suf = Ty::from_name(cap_suf.get(0).unwrap().as_str());
             if cap_suf.name("int_like").is_some() {
                 match lit {
-                    IntLike{ ref mut ty, .. }   => *ty = Some(ty_suf),
+                    IntLike{ ref mut ty, .. }   =>
+                        *ty = Some(Box::new(ty_suf)),
                     FloatLike{..}               => return err,
                     _                           => unreachable!(),
                 }
             } else { // float-like
                 match lit {
                     IntLike{ val, .. }          => lit = FloatLike {
-                        ty: Some(ty_suf),
+                        ty: Some(Box::new(ty_suf)),
                         val: val as fmax,
                     },
-                    FloatLike{ ref mut ty, .. } => *ty = Some(ty_suf),
+                    FloatLike{ ref mut ty, .. } =>
+                        *ty = Some(Box::new(ty_suf)),
                     _                           => unreachable!(),
                 }
             }
@@ -458,7 +460,13 @@ impl<'input> Iterator for Tokenizer<'input> {
                     m if is("line_outerdoc")        => Some(OuterDoc(&m[3..])),
                     _ if is("line_comment")         => None,
                     m if is("lifetime")             => Some(Lifetime(&m[1..])),
-                    m if is("keyword")              => Some(Keyword(KEYWORDS[m])),
+                    m if is("keyword")              => if m == "true" {
+                        Some(Literal(Lit::Bool(true)))
+                    } else if m == "false" {
+                        Some(Literal(Lit::Bool(false)))
+                    } else {
+                        Some(Keyword(KEYWORDS[m]))
+                    },
                     m if is("ident")                => Some(Ident(m)),
                     _ if is("block_innerdoc_beg")   => Some(InnerDoc(self.eat_block_comment()?)),
                     _ if is("char")                 => Some(Literal(parse_cap_char(&cap)?)),
@@ -629,8 +637,8 @@ pub mod test { // pub for reuse
 
     #[test]
     fn lexer_literal_lifetime() {
-        let styi32 = Some(Ty::from_name("i32"));
-        let styf64 = Some(Ty::from_name("f64"));
+        let styi32 = Some(Box::new(Ty::from_name("i32")));
+        let styf64 = Some(Box::new(Ty::from_name("f64")));
 
         assert_eq!(lex("1"),            Ok(vec![(Literal(Lit::IntLike{ ty: None, val: 1 }), 0..1)]));
         assert_eq!(lex("1i32"),         Ok(vec![(Literal(Lit::IntLike{ ty: styi32.clone(), val: 1 }), 0..4)]));

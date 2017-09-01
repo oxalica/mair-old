@@ -3,94 +3,139 @@ use std::rc::Rc;
 use super::lexer::{Loc, TokenKind};
 use super::{imax, fmax};
 
-/// A module, or a crate, as well as a rust source file.
+/// A module, a crate, or a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Crate<'a> {
-    pub attrs:  Vec<Attr<'a>>,
-    pub items:  Vec<Item<'a>>,
+pub struct Mod<'a> {
+    pub inner_attrs:  Vec<Attr<'a>>,
+    pub items:        Vec<Item<'a>>,
 }
 
 /// An Item, which is the component of a crate/module.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Item<'a> {
-    pub is_pub: bool,
-    pub attrs:  Vec<Attr<'a>>,
-    pub detail: ItemKind<'a>,
+    pub outer_attrs:  Vec<Attr<'a>>,
+    pub is_pub:       bool,
+    pub detail:       ItemKind<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ItemKind<'a> {
     // https://doc.rust-lang.org/reference/items.html#items
-    /// `extern crate <name>;`
-    ExternCrate { name: &'a str },
+    /// `extern` `crate` <name> `;`
+    ExternCrate { name: Ident<'a>, semi: bool },
     /// `use <path>::*;`
-    UseAll      { path: Path<'a> },
-    /// `use <path>::<name> as <alias>;`
-    /// `use <path>::{<name1> as <alias1>, ...};`
-    UseSome     { path: Path<'a>, names: Vec<UseName<'a>> },
+    UseAll      { path: Path<'a>, semi: bool },
+    /// `use <path>::<name> [as <alias>];`
+    UseOne      { path: Path<'a>, name: UseName<'a>, semi: bool },
+    /// `use <path>::{<name1> [as <alias1>], ... };`
+    UseSome     { path: Path<'a>, names: Vec<UseName<'a>>, semi: bool },
     /// `mod <name>;`
-    ExternMod   { name: &'a str },
-    /// `mod <name> { <item1> ... };`
-    Mod         { name: &'a str, items: Vec<Item<'a>> },
+    ExternMod   { name: Ident<'a>, semi: bool },
+    /// `mod <name> { <item1> ... }`
+    Mod         { name:  Ident<'a>
+                , inner: Mod<'a> },
+    /// `fn <sig>;`
+    FuncDecl    { sig: Box<FuncSig<'a>>, semi: bool },
     /// `fn <sig> <body>`
-    /// `body` will be always an `Expr::Block`.
-    Func        { sig: FuncSig<'a>, body: Option<Expr<'a>> },
+    /// The `body` will be always an `Expr::Block`.
+    Func        { sig: Box<FuncSig<'a>>, body: Box<Expr<'a>> },
     /// `extern [abi] { <item1> ... }`
-    Extern      { abi: ABI, items: Vec<Item<'a>> },
-    /// `type <alias> <template> [where_clause] = <origin>;`
-    Type        { alias: &'a str, templ: Template<'a>, origin: Ty<'a> },
+    Extern      { abi: ABI, inner: Option<Mod<'a>> },
+    /// `type <alias> <template> [where_clause] [= <origin>];`
+    Type        { alias:  Ident<'a>
+                , templ:  Template<'a>
+                , whs:    OptWhere<'a>
+                , origin: Option<Box<Ty<'a>>>
+                , semi:   bool },
     /// `struct <name> <template> [where_clause];`
-    StructUnit  { name: &'a str, templ: Template<'a> },
+    StructUnit  { name:  Ident<'a>
+                , templ: Template<'a>
+                , whs:   OptWhere<'a>
+                , semi:  bool },
     /// `struct <name> <template> (<elem1>, ...) [where_clause];`
-    StructTuple { name: &'a str, templ: Template<'a>, elems: Vec<StructTupleElem<'a>> },
+    StructTuple { name:  Ident<'a>
+                , templ: Template<'a>
+                , elems: Vec<StructTupleElem<'a>>
+                , whs:   OptWhere<'a>
+                , semi:  bool },
     /// `struct <name> <template> [where_clause] { <field1>, ... }`
-    StructNormal{ name: &'a str, templ: Template<'a>, fields: Vec<StructField<'a>> },
+    StructFields{ name:   Ident<'a>
+                , templ:  Template<'a>
+                , whs:    OptWhere<'a>
+                , fields: Vec<StructField<'a>> },
     /// `enum <name> <template> [where_clause] { <var1>, ... }`
-    Enum        { name: &'a str, templ: Template<'a>, vars: Vec<EnumVar<'a>> },
+    Enum        { name:  Ident<'a>
+                , templ: Template<'a>
+                , whs:   OptWhere<'a>
+                , vars:  Option<Vec<EnumVar<'a>>> },
     /// `const <name>: <ty> = <val>;`
-    Const       { name: &'a str, ty: Ty<'a>, val: Expr<'a> },
+    Const       { name: Ident<'a>
+                , ty:   Option<Box<Ty<'a>>>
+                , val:  Option<Box<Expr<'a>>>
+                , semi: bool },
     /// `static <name>: <ty> = <val>;`
-    Static      { name: &'a str, ty: Ty<'a>, val: Expr<'a> },
+    Static      { name: Ident<'a>
+                , ty:   Option<Box<Ty<'a>>>
+                , val:  Option<Box<Expr<'a>>>
+                , semi: bool },
     /// `trait <name> <template> [where_clause] { <item1> ... }`
-    Trait       { name: &'a str, templ: Template<'a>, items: Vec<Item<'a>> },
+    Trait       { name:  Ident<'a>
+                , templ: Template<'a>
+                , base:  Option<Box<Ty<'a>>>
+                , whs:   OptWhere<'a>
+                , inner: Option<Mod<'a>> },
     /// `impl <template> <ty> [where_clause] { <item1> ... }`
-    ImplType    { templ: Template<'a>, ty: Ty<'a>, items: Vec<Item<'a>> },
-    /// `impl <template> <trait_name> for <ty> [where_clause] { <item1> ... }`
-    ImplTrait   { templ: Template<'a>, trait_name: TraitName<'a>, ty: Ty<'a>,
-                  items: Vec<Item<'a>> },
+    ImplType    { templ: Template<'a>
+                , ty:    Box<Ty<'a>>
+                , whs:   OptWhere<'a>
+                , inner: Option<Mod<'a>> },
+    /// `impl <template> <tr> for <ty> [where_clause] { <item1> ... }`
+    ImplTrait   { templ: Template<'a>
+                , tr:    Box<Trait<'a>>
+                , ty:    Box<Ty<'a>>
+                , whs:   OptWhere<'a>
+                , inner: Option<Mod<'a>> },
     PluginInvoke(PluginInvoke<'a>),
+    Unknow      (TT<'a>),
+    Null,
 }
 
-/// The item or variable referred in a `use` declaration.
+/// A single name referred in a `use` declaration.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct UseName<'a> {
-    pub name:  &'a str,
-    pub alias: Option<&'a str>,
+pub enum UseName<'a> {
+    Self_,
+    Name  { name: Ident<'a>, alias: Option<Ident<'a>> },
+    Unknow(TT<'a>),
 }
 
 /// An element of a tuple-like struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct StructTupleElem<'a> {
-    pub is_pub: bool,
-    pub attrs:  Vec<Attr<'a>>,
-    pub ty:     Ty<'a>,
+pub enum StructTupleElem<'a> {
+    Elem  { attrs: Vec<Attr<'a>>, is_pub: bool, ty: Ty<'a> },
+    Unknow(TT<'a>),
 }
 
 /// a field of a normal struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct StructField<'a> {
-    pub name:   &'a str,
-    pub is_pub: bool,
-    pub attrs:  Vec<Attr<'a>>,
-    pub ty:     Ty<'a>,
+pub enum StructField<'a> {
+    Field { attrs: Vec<Attr<'a>>
+          , is_pub: bool
+          , name: Ident<'a>
+          , ty: Option<Ty<'a>> },
+    Unknow(TT<'a>),
 }
 
 /// An variant of an `enum`.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum EnumVar<'a> {
-    Unit   { name: &'a str, attrs: Vec<Attr<'a>> },
-    Tuple  { name: &'a str, attrs: Vec<Attr<'a>>, elems: Vec<StructTupleElem<'a>> },
-    Struct { name: &'a str, attrs: Vec<Attr<'a>>, fields: Vec<StructField<'a>> },
+    Unit  { attrs: Vec<Attr<'a>>, name: Ident<'a> },
+    Tuple { attrs: Vec<Attr<'a>>
+          , name: Ident<'a>
+          , elems: Vec<StructTupleElem<'a>> },
+    Struct{ attrs: Vec<Attr<'a>>
+          , name: Ident<'a>
+          , fields: Vec<StructField<'a>> },
+    Unknow(TT<'a>),
 }
 
 /// A path, like `::std::Option`, `MyEnum::A`, etc.
@@ -103,62 +148,92 @@ pub struct Path<'a> {
 /// A path component, maybe with template hint (if any).
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PathComp<'a> {
-    Name  (&'a str),
-    TyHint(Vec<Ty<'a>>),
+    Self_,
+    Super,
+    Name { name: Ident<'a>, hint: Option<Vec<TyHintArg<'a>>> },
 }
 
-/// Template types and trait bounds.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Template<'a> {
-    pub lifetimes: Vec<Lifetime<'a>>,
-    pub tys:       Vec<&'a str>,
-    pub restricts: Vec<Restrict<'a>>,
+pub enum TyHintArg<'a> {
+    Lifetime(Lifetime<'a>),
+    Ty      (Ty<'a>),
+    Unknow  (TT<'a>),
 }
+
+pub type Template<'a> = Vec<TemplArg<'a>>;
+
+/// Template type or trait bound.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TemplArg<'a> {
+    Lifetime{ name: Lifetime<'a>, bound: Option<Vec<Lifetime<'a>>> },
+    Ty      { name: Ident<'a>, bound: Option<Trait<'a>> },
+    Unknow  (TT<'a>),
+}
+
+pub type Where<'a> = Vec<Restrict<'a>>;
+pub type OptWhere<'a> = Option<Where<'a>>;
 
 /// A trait bound or lifetime restriction.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Restrict<'a> {
-    TraitBound { ty: Ty<'a>, bound: TraitName<'a> },
-    LifeBound  { lt: Lifetime<'a>, bound: Lifetime<'a> },
+    LifeBound  { lt: Lifetime<'a>, bound: Option<Vec<Lifetime<'a>>> },
+    TraitBound { ty: Ty<'a>, bound: Option<Trait<'a>> },
+    Unknow     (TT<'a>),
 }
 
 /// The signature of a function, including templates, trait bounds,
 /// argument names and the function type.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FuncSig<'a> {
-    pub name:      &'a str,
+    pub is_unsafe: bool,
+    pub abi:       ABI,
+    pub name:      Ident<'a>,
     pub templ:     Template<'a>,
-    pub arg_names: Vec<Pat<'a>>,
-    pub ty:        FuncTy<'a>,
+    pub args:      Option<Vec<FuncParam<'a>>>,
+    pub is_va:     bool,
+    pub ret_ty:    Option<Box<Ty<'a>>>,
+    pub whs:       OptWhere<'a>,
 }
 
+/// The signature of a lambda function.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct LambdaSig<'a> {
+    pub args:   Vec<FuncParam<'a>>,
+    pub ret_ty: Option<Box<Ty<'a>>>,
+}
+
+/// A parameter of a function.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum FuncParam<'a> {
+    SelfMove{ is_mut: bool },
+    SelfRef { is_mut: bool },
+    SelfAs  (Ty<'a>),
+    Bind    { pat: Pat<'a>, ty: Option<Box<Ty<'a>>> },
+    Unknow  (TT<'a>),
+}
+
+/// The type of a function.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FuncTy<'a> {
     pub is_unsafe: bool,
     pub abi:       ABI,
-    pub self_arg:  SelfArg,
-    pub args:      Vec<Ty<'a>>,
-    /// Variable arguments
+    pub args:      Option<Vec<FuncTyParam<'a>>>,
     pub is_va:     bool,
-    pub ret_ty:    Ty<'a>,
+    pub ret_ty:    Option<Box<Ty<'a>>>,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum FuncTyParam<'a> {
+    Param { name: Option<Ident<'a>>, ty: Ty<'a> },
+    Unknow(TT<'a>),
+}
+
+/// The ABI of a function or an `extern` block.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ABI {
     Normal,
     Extern,
     Specific(Rc<String>),
-}
-
-/// The argument `self`.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum SelfArg {
-    /// No argument `self`. For static function or non-member-function.
-    None,
-    /// fn([mut] self, ...)
-    Move   { is_mut: bool },
-    /// fn(&[mut] self, ...)
-    Borrow { is_mut: bool },
 }
 
 /// A type.
@@ -168,87 +243,157 @@ pub enum Ty<'a> {
     Hole,
     /// The type `!`.
     Never,
-    /// A generic type applied with type paramaters, like `Vec<i32>`.
-    /// No type paramaters indicates a simple type, like `i32`.
-    Apply (TyApply<'a>),
+    /// The type `Self.
+    Self_,
+    /// An unsized type only with trait bounds.
+    Traits (Vec<TyApply<'a>>),
+    /// A generic type/trait applied with type paramaters, like `Vec<i32>`,
+    /// `Iterator<Item=i32>`.
+    /// No type arguments indicates a simple type/trait, like `i32`, `Copy`.
+    Apply  (Box<TyApply<'a>>),
     /// A tuple type, like `(i32, i64)`.
-    Tuple (Vec<Ty<'a>>),
-    /// The pointer to a function, like `fn(i32, u8) -> usize`.
-    Func  (Box<FuncTy<'a>>),
+    Tuple  (Vec<Ty<'a>>),
+    /// A type inside paren.
+    Paren  (Box<Ty<'a>>),
     /// Reference.
-    Ref   { is_mut: bool, lifetime: Option<Lifetime<'a>>, inner: Box<Ty<'a>> },
-    /// Pointers.
-    Ptr   { is_mut: bool, inner: Box<Ty<'a>> },
+    Ref    { lt: Option<Lifetime<'a>>, is_mut: bool, ty: Box<Ty<'a>> },
+    /// Pointer.
+    Ptr    { is_mut: bool, ty: Box<Ty<'a>> },
     /// Slice.
-    Slice (Box<Ty<'a>>),
+    Slice  { ty: Box<Ty<'a>>, unknow: Vec<TT<'a>> },
     /// Array.
-    Array { ty: Box<Ty<'a>>, size: imax },
+    Array  { ty: Box<Ty<'a>>, size: Box<Expr<'a>>, unknow: Vec<TT<'a>> },
+    /// The function pointer type, like `fn(i32, u8) -> usize`.
+    Func   (Box<FuncTy<'a>>),
+    Unknow (TT<'a>),
+}
+pub type Trait<'a> = Ty<'a>; // Types and traits are the same things at this
+                             // time.
+
+/// A simple type, specialized type or trait.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TyApply<'a> {
+    Angle { name: Path<'a>, args: Option<Vec<TyApplyArg<'a>>> },
+    Paren { name: Path<'a>, args: Vec<Ty<'a>>, ret_ty: Option<Box<Ty<'a>>> },
+    Unknow(TT<'a>),
 }
 
-/// A simple type, specialized type or trait name.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct TyApply<'a> {
-    pub name:      Path<'a>,
-    pub lifetimes: Vec<Lifetime<'a>>,
-    pub params:    Vec<Ty<'a>>,
+pub enum TyApplyArg<'a> {
+    Lifetime(Lifetime<'a>),
+    Ty      (Ty<'a>),
+    AssocTy { name: Ident<'a>, ty: Ty<'a> },
+    Unknow  (TT<'a>),
 }
-pub type TraitName<'a> = TyApply<'a>;
 
 /// An attribute.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Attr<'a> {
-    /// A single attribute name, like `test`, `macro_use`.
-    Flag  (&'a str),
+    Doc (&'a str),
+    Meta{ meta: Meta<'a>, unknow: Vec<TT<'a>> },
+}
+
+/// An meta (the content inside `#[]`).
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Meta<'a> {
+    /// A single meta name, like `test`, `macro_use`.
+    Flag    (Ident<'a>),
     /// A key-value pair, like `crate_type = "lib"`, `recursion_limit="64"`.
-    Value { key: &'a str, value: Literal<'a> },
-    /// An attribute with a list of sub-attribute arguments,
+    KeyValue{ key: Ident<'a>, value: Literal<'a> },
+    /// A meta with a list of sub-meta arguments,
     /// like `cfg(target_os="linux")`.
-    Sub   (&'a str, Vec<Attr<'a>>),
+    Sub     { name: Ident<'a>, subs: Vec<Meta<'a>> },
+    Unknow  (TT<'a>),
 }
 
 /// A statement.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Stmt<'a> {
-    Item        (Item<'a>),
-    Let         { pat: Pat<'a>, ty: Option<Ty<'a>>, expr: Expr<'a> },
-    Expr        (Expr<'a>),
-    PluginInvoke(PluginInvoke<'a>),
+    Item        (Box<Item<'a>>),
+    Let         { pat:  Pat<'a>
+                , ty:   Option<Box<Ty<'a>>>
+                , expr: Option<Box<Expr<'a>>>
+                , semi: bool},
+    Expr        { expr: Expr<'a>, semi: bool },
+    PluginInvoke{ p: PluginInvoke<'a>, semi: bool },
+    Unknow      (TT<'a>),
 }
 
 /// An expression.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
-    Literal      (Literal<'a>),
-    Path         (Path<'a>),
-    Tuple        (Vec<Expr<'a>>),
-    Struct       { ty: Ty<'a>, params: Vec<(&'a str, Expr<'a>)>, base: Option<Box<Expr<'a>>> },
-    Block        { stmts: Vec<Stmt<'a>>, ret: Option<Box<Expr<'a>>> },
-    MemberCall   { obj: Box<Expr<'a>>, func: &'a str, params: Vec<Expr<'a>> },
-    TupleField   { obj: Box<Expr<'a>>, index: imax },
-    StructField  { obj: Box<Expr<'a>>, member: &'a str },
-    ArrayFill    { elem: Box<Expr<'a>>, len: Box<Expr<'a>> },
-    ArrayLit     (Vec<Expr<'a>>),
-    // Index is BinaryOp
+    Literal     (Literal<'a>),
+    Path        (Path<'a>),
+    Tuple       (Vec<Expr<'a>>),
+    Paren       (Box<Expr<'a>>),
+    Struct      { ty: Box<Ty<'a>>
+                , fields: Option<Vec<ExprStructField<'a>>>
+                , base: Option<Box<Expr<'a>>> },
+    Block       { stmts: Vec<Stmt<'a>>, ret: Option<Box<Expr<'a>>> },
+    Unsafe      (Option<Box<Expr<'a>>>),
+    MemberCall  { obj:  Box<Expr<'a>>
+                , func: PathComp<'a>
+                , args: Vec<Expr<'a>> },
+    StructField { obj: Box<Expr<'a>>, field: PathComp<'a> },
+    TupleField  { obj: Box<Expr<'a>>, index: imax },
+    Index       { obj: Box<Expr<'a>>
+                , index: Box<Expr<'a>>
+                , unknow: Vec<TT<'a>> },
+    ArrayFill   { elem: Box<Expr<'a>>
+                , len: Box<Expr<'a>>
+                , unknow: Vec<TT<'a>> },
+    ArrayLit    (Vec<Expr<'a>>),
     // Range is BinaryOp
-    UnaryOp      (UnaryOp, Box<Expr<'a>>),
-    AsOp         { expr: Box<Expr<'a>>, ty: Ty<'a> },
-    RangeFromOp  (Box<Expr<'a>>),
-    RangeToOp    (Box<Expr<'a>>),
-    BinaryOp     (Box<Expr<'a>>, BinaryOp, Box<Expr<'a>>),
-    Call         { func: Box<Expr<'a>>, params: Vec<Expr<'a>> },
-    Lambda       { is_move: bool, sig: FuncSig<'a>, body: Box<Expr<'a>> },
-    Loop         { label: Lifetime<'a>, body: Box<Expr<'a>> },
-    Break        (Option<Lifetime<'a>>),
-    Continue     (Option<Lifetime<'a>>),
-    While        { label: Lifetime<'a>, cond: Box<Expr<'a>>, body: Box<Expr<'a>> },
-    For          { label: Lifetime<'a>, iter: Pat<'a>, itee: Box<Expr<'a>>, body: Box<Expr<'a>> },
-    If           { cond: Box<Expr<'a>>, then_expr: Box<Expr<'a>>, else_expr: Option<Box<Expr<'a>>> },
-    Match        { expr: Box<Expr<'a>>, arms: Vec<MatchArm<'a>> },
-    IfLet        { pat: Pat<'a>, cond: Box<Expr<'a>>,
-                  then_expr: Box<Expr<'a>>, else_expr: Option<Box<Expr<'a>>> },
-    WhileLet     { pat: Pat<'a>, cond: Box<Expr<'a>>, body: Box<Expr<'a>> },
-    Return       (Option<Box<Expr<'a>>>),
-    PluginInvoke (PluginInvoke<'a>),
+    UnaryOp     (UnaryOp, Box<Expr<'a>>),
+    As          { expr: Box<Expr<'a>>, ty: Box<Ty<'a>> },
+    Colon       { expr: Box<Expr<'a>>, ty: Box<Ty<'a>> },
+    BinaryOp    (BinaryOp, Box<Expr<'a>>, Box<Expr<'a>>),
+    Call        { func: Box<Expr<'a>>, args: Vec<Expr<'a>> },
+    Lambda      { is_move: bool
+                , sig: Box<LambdaSig<'a>>
+                , body: Option<Box<Expr<'a>>> },
+    Break       { label: Option<Lifetime<'a>>, expr: Option<Box<Expr<'a>>> },
+    Continue    { label: Option<Lifetime<'a>> },
+    Loop        { label: Option<Lifetime<'a>>, body: Option<Box<Expr<'a>>> },
+    While       { label: Option<Lifetime<'a>>
+                , cond: Box<Expr<'a>>
+                , body: Option<Box<Expr<'a>>> },
+    WhileLet    { pat:  Box<Pat<'a>>
+                , expr: Option<Box<Expr<'a>>>
+                , body: Option<Box<Expr<'a>>> },
+    For         { label: Option<Lifetime<'a>>
+                , pat:  Box<Pat<'a>>
+                , iter: Option<Box<Expr<'a>>>
+                , body: Option<Box<Expr<'a>>> },
+    // else_expr ~ None          No else branch. ok.
+    //           ~ Some(None)    `.. else <not {}>` err.
+    //           ~ Some(Some(e)) `.. else <e>` ok.
+    If          { cond:      Box<Expr<'a>>
+                , then_expr: Option<Box<Expr<'a>>>
+                , else_expr: Option<Option<Box<Expr<'a>>>> },
+    IfLet       { pat:        Box<Pat<'a>>
+                , match_expr: Option<Box<Expr<'a>>>
+                , then_expr:  Option<Box<Expr<'a>>>
+                , else_expr:  Option<Option<Box<Expr<'a>>>> },
+    Match       { expr: Box<Expr<'a>>, arms: Option<Vec<MatchArm<'a>>> },
+    Return      (Option<Box<Expr<'a>>>),
+    PluginInvoke(PluginInvoke<'a>),
+    Unknow      (TT<'a>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ExprStructField<'a> {
+    Field { name: Ident<'a>, expr: Option<Box<Expr<'a>>> },
+    Unknow(TT<'a>),
+}
+
+/// A match arm.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum MatchArm<'a> {
+    Arm         { pats: Vec<Pat<'a>>
+                , cond: Option<Box<Expr<'a>>>
+                , expr: Option<Expr<'a>> },
+    Unknow      (TT<'a>),
 }
 
 /// A pattern.
@@ -256,36 +401,38 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
 pub enum Pat<'a> {
     /// The hole `_`.
     Hole,
-    /// A pattern with a variable bind. eg. `a@1...9`
-    Bind           { name: &'a str, pat: Box<Pat<'a>> },
-    /// A unit-like enum variant or unit struct name, or a variable bind.
-    /// eg. `Option::None`, `var`
-    Var            (Path<'a>),
+    /// A pattern with a variable bind. eg. `ref a@Some(_)`
+    /// If `pat` is None, not `is_ref` and not `is_mut, it can be either a
+    /// variant of an enum or a bind matching everything, like `None`.
+    BindLike      { name:   Ident<'a>
+                  , is_ref: bool
+                  , is_mut: bool
+                  , pat:    Option<Box<Pat<'a>>> },
+    /// A path to a variant of unit-like enum or unit struct.
+    Path          (Path<'a>),
     /// An literal. eg. `123`
-    Literal        (Literal<'a>),
+    Literal       (Literal<'a>),
     /// A range patterns. eg. `1...2`, `'a'...'z'`
-    Range          (Literal<'a>, Literal<'a>),
+    Range         (Literal<'a>, Literal<'a>),
     /// A tuple. eg. `(_, _)`
-    Tuple          (Vec<Pat<'a>>),
+    Tuple         (Vec<Pat<'a>>),
+    /// A pattern inside (redundant) paren.
+    Paren         (Box<Pat<'a>>),
     /// A tuple-like enum variant or tuple struct. eg. `Some(1)`
-    DestructTuple  { name: Path<'a>, elems: Vec<Pat<'a>> },
+    DestructTuple { name: Path<'a>, elems: Vec<Pat<'a>> },
     /// A struct-like enum variant or normal struct. eg. `Pt{ x: xx, y }`
-    DestructNormal { name: Path<'a>, fields: Vec<DestructField<'a>>, ellipsis: bool},
+    DestructNormal{ name: Path<'a>
+                  , fields: Vec<DestructField<'a>>
+                  , ellipsis: bool},
     /// A plugin/macro generating a pattern.
-    PluginInvoke   (PluginInvoke<'a>),
+    PluginInvoke  (PluginInvoke<'a>),
+    Unknow        (TT<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct DestructField<'a> {
-    pub field: &'a str,
-    pub pat:   Option<Box<Pat<'a>>>,
-}
-
-/// A match arm.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct MatchArm<'a> {
-    pub pats: Vec<Pat<'a>>,
-    pub expr: Expr<'a>,
+pub enum DestructField<'a> {
+    Field { name: Ident<'a>, pat: Option<Box<Pat<'a>>> },
+    Unknow(TT<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -302,9 +449,9 @@ pub enum Delimiter {
 /// eg. `name! ( tts... )`
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct PluginInvoke<'a> {
-    pub name:  &'a str,
-    pub ident: Option<&'a str>,
-    pub tt:    TT<'a>, // must be TokenTree::Tree
+    pub name:  Ident<'a>,
+    pub ident: Option<Ident<'a>>,
+    pub tt:    Option<TT<'a>>, // must be TokenTree::Tree
 }
 
 /// A token tree with location.
@@ -319,19 +466,21 @@ pub type TT<'a> = (TTKind<'a>, Loc);
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum UnaryOp {
     // https://doc.rust-lang.org/grammar.html#unary-operator-expressions
-    Neg, Deref, Not,
+    Try,
+    Neg, Not,
+    Borrow, BorrowMut, Deref,
 }
-
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum BinaryOp {
     // https://doc.rust-lang.org/grammar.html#binary-operator-expressions
-    Plus, Sub, Mul, Div, Mod,
+    Add, Sub, Mul, Div, Mod,
     And, Or, Xor, Shl, Shr,
     LogAnd, LogOr,
     Equ, Ne, Lt, Gt, Le, Ge,
-    /// `As` in `Expr`
+    /// `as` in `Expr`
     Range, RangeInclusive,
+    Place,
     Assign,
     AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
     AndAssign, OrAssign, XorAssign, ShlAssign, ShrAssign,
@@ -345,40 +494,54 @@ pub enum Literal<'a> {
     /// A string, raw string, byte string or raw byte string.
     StrLike  { is_bytestr: bool, s: Rc<String> },
     /// An interer type. If it has no type suffix, `ty` is None.
-    IntLike  { ty: Option<Ty<'a>>, val: imax },
+    IntLike  { ty: Option<Box<Ty<'a>>>, val: imax },
     /// An floating point type. If it has no type suffix, `ty` is None.
-    FloatLike{ ty: Option<Ty<'a>>, val: fmax },
+    FloatLike{ ty: Option<Box<Ty<'a>>>, val: fmax },
+    /// A boolean literal `true` or `false`.
+    Bool     (bool),
 }
 
 pub type Lifetime<'a> = &'a str;
-
-impl<'a> Attr<'a> {
-    pub fn from_doc(doc: &'a str) -> Self {
-        Attr::Value{
-            key: "doc",
-            value: Literal::StrLike{
-                is_bytestr: false,
-                s: Rc::new(doc.to_string()),
-            },
-        }
-    }
-}
+pub type Ident<'a> = Option<&'a str>;
 
 impl<'a> Eq for Literal<'a> {} // The float value is never NaN.
 
 impl<'a> Ty<'a> {
     pub fn from_path(path: Path<'a>) -> Self {
-        Ty::Apply(TyApply{ name: path, lifetimes: vec![], params: vec![] })
+        Ty::Apply(Box::new(TyApply::Angle{
+            name: path,
+            args: None,
+        }))
     }
 
     pub fn from_name(name: &'a str) -> Self {
         Ty::from_path(Path{
             is_absolute: false,
-            comps: vec![PathComp::Name(name)],
+            comps: vec![PathComp::Name{ name: Some(name), hint: None }],
         })
     }
 
     pub fn unit() -> Self {
         Ty::Tuple(vec![])
+    }
+}
+
+impl<'a> Expr<'a> {
+    pub fn is_item_like(&self) -> bool {
+        match *self {
+            Expr::Block{ .. } |
+            Expr::Loop{ .. } |
+            Expr::While{ .. } |
+            Expr::WhileLet{ .. } |
+            Expr::For{ .. } |
+            Expr::If{ .. } |
+            Expr::IfLet{ .. } |
+            Expr::Match{ .. } |
+            Expr::PluginInvoke(PluginInvoke{
+                tt: Some((TTKind::Tree{ delim: Delimiter::Brace, .. }, _)),
+                ..
+            }) => true,
+            _ => false,
+        }
     }
 }
