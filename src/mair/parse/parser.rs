@@ -1,10 +1,10 @@
 use super::lexer::{TokenKind as Tokk, SymbolType, Token, LocStr};
 use super::ast::*;
 use super::error::UnmatchedDelimError;
-use super::putback_stream::PutbackStream;
+use super::ttstream::TTStream;
 use self::Delimiter::*;
 
-pub struct Parser<'t>(PutbackStream<TT<'t>>);
+pub struct Parser<'t>(TTStream<'t>);
 
 /// Parse tokens into `TT`s.
 pub fn parse_tts<'t>(
@@ -68,8 +68,8 @@ fn parse_tts_helper<'t, 'a>(
 
 /// Parser a `.rs` file. It will never fail, and source with grammar errors will
 /// be parsed into specific position (as TT) of AST.
-pub fn parse_crate(tts: Vec<TT>) -> Mod {
-    Parser::new(tts).eat_mod_end()
+pub fn parse_crate<'t>(source: &'t str, tts: Vec<TT<'t>>) -> Mod<'t> {
+    Parser::new(source, tts).eat_mod_end()
 }
 
 // Helper macros
@@ -130,8 +130,12 @@ macro_rules! eatKw {
 }
 
 impl<'t> Parser<'t> {
-    pub fn new(tts: Vec<TT<'t>>) -> Self {
-        Parser(PutbackStream::new(tts))
+    pub fn new(source: &'t str, tts: Vec<TT<'t>>) -> Self {
+        Parser(TTStream::new(tts, &source[..0]))
+    }
+
+    fn new_inner(loc: LocStr<'t>, tts: Vec<TT<'t>>) -> Self {
+        Parser(TTStream::new(tts, &loc[1..1])) // skip the first `(`
     }
 
     /// Take the rest of TTs.
@@ -334,18 +338,18 @@ impl<'t> Parser<'t> {
     /// Eat and return inner attributes and items inside `{}`, or return None.
     fn eat_opt_brace_mod(&mut self) -> Option<Mod<'t>> {
         match_eat!{ self.0;
-            tree!(_, delim: Brace, tts) =>
-                Some(Parser::new(tts).eat_mod_end()),
+            tree!(loc, delim: Brace, tts) =>
+                Some(Parser::new_inner(loc, tts).eat_mod_end()),
             _ => None,
         }
     }
 
     /// Eat and return an identifier, or return the empty str slice after the
-    /// last TT eaten.
+    /// last TT.
     fn eat_ident(&mut self) -> Ident<'t> {
         match_eat!{ self.0;
             ident!(s) => Ok(s),
-            _ => unimplemented!(),
+            _ => Err(self.0.prev_last_pos()),
         }
     }
 
@@ -413,8 +417,8 @@ impl<'t> Parser<'t> {
             match_eat!{ self.0;
                 tok!(Tokk::InnerDoc(doc), loc) =>
                     v.push(Attr::Doc{ loc, doc }),
-                sym!("#"), sym!("!"), tree!(_, delim: Bracket, tts) => {
-                    let mut p = Parser::new(tts);
+                sym!("#"), sym!("!"), tree!(loc, delim: Bracket, tts) => {
+                    let mut p = Parser::new_inner(loc, tts);
                     let meta = p.eat_meta();
                     v.push(Attr::Meta{ meta, unknow: p.rest() })
                 },
@@ -430,8 +434,8 @@ impl<'t> Parser<'t> {
             match_eat!{ self.0;
                 tok!(Tokk::OuterDoc(doc), loc) =>
                     v.push(Attr::Doc{ loc, doc }),
-                sym!("#"), tree!(_, delim: Bracket, tts) => {
-                    let mut p = Parser::new(tts);
+                sym!("#"), tree!(loc, delim: Bracket, tts) => {
+                    let mut p = Parser::new_inner(loc, tts);
                     let meta = p.eat_meta();
                     v.push(Attr::Meta{ meta, unknow: p.rest() })
                 },
@@ -446,8 +450,9 @@ impl<'t> Parser<'t> {
         match_eat!{ self.0;
             sym!("="), lit!(value) =>
                 Meta::KeyValue{ key: name, value },
-            tree!(_, delim: Paren, tts) => {
-                let (subs, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Paren, tts) => {
+                let (subs, _) = Parser::new_inner(loc, tts)
+                                       .eat_many_comma_tail_end(
                     Meta::Unknow,
                     |p| p.eat_meta(),
                 );
@@ -547,8 +552,9 @@ impl<'t> Parser<'t> {
                 let semi = self.eat_semi();
                 ItemKind::UseAll{ path, semi }
             },
-            tree!(_, delim: Brace, tts) => {
-                let (names, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Brace, tts) => {
+                let (names, _) = Parser::new_inner(loc, tts)
+                                        .eat_many_comma_tail_end(
                     UseName::Unknow,
                     Parser::eat_use_name,
                 );
@@ -613,8 +619,9 @@ impl<'t> Parser<'t> {
         let name = self.eat_ident();
         let templ = self.eat_templ();
         let (args, va) = match_eat!{ self.0;
-            tree!(_, delim: Paren, tts) => {
-                let (args, va, _) = Parser::new(tts).eat_many_tail_last(
+            tree!(loc, delim: Paren, tts) => {
+                let (args, va, _) = Parser::new_inner(loc, tts)
+                                           .eat_many_tail_last(
                     symbol_type!(","),
                     |p| p.is_end(),
                     FuncParam::Unknow,
@@ -693,8 +700,9 @@ impl<'t> Parser<'t> {
         let name = self.eat_ident();
         let templ = self.eat_templ();
         match_eat!{ self.0;
-            tree!(_, delim: Paren, tts) => {
-                let (elems, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Paren, tts) => {
+                let (elems, _) = Parser::new_inner(loc, tts)
+                                        .eat_many_comma_tail_end(
                     StructTupleElem::Unknow,
                     Parser::eat_struct_tuple_elem,
                 );
@@ -705,8 +713,9 @@ impl<'t> Parser<'t> {
             _ => {
                 let whs = self.eat_opt_whs();
                 let opt_fields = match_eat!{ self.0;
-                    tree!(_, delim: Brace, tts) => {
-                        let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    tree!(loc, delim: Brace, tts) => {
+                        let (v, _) = Parser::new_inner(loc, tts)
+                                            .eat_many_comma_tail_end(
                             StructField::Unknow,
                             Parser::eat_struct_field,
                         );
@@ -753,8 +762,9 @@ impl<'t> Parser<'t> {
         let templ = self.eat_templ();
         let whs = self.eat_opt_whs();
         let vars = match_eat!{ self.0;
-            tree!(_, delim: Brace, tts) => {
-                let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Brace, tts) => {
+                let (v, _) = Parser::new_inner(loc, tts)
+                                    .eat_many_comma_tail_end(
                     EnumVar::Unknow,
                     Parser::eat_enum_var,
                 );
@@ -770,15 +780,17 @@ impl<'t> Parser<'t> {
         let attrs = self.eat_outer_attrs();
         let name = self.eat_ident();
         match_eat!{ self.0;
-            tree!(_, delim: Paren, tts) => {
-                let (elems, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Paren, tts) => {
+                let (elems, _) = Parser::new_inner(loc, tts)
+                                        .eat_many_comma_tail_end(
                     StructTupleElem::Unknow,
                     Parser::eat_struct_tuple_elem,
                 );
                 EnumVar::Tuple{ attrs, name, elems }
             },
-            tree!(_, delim: Brace, tts) => {
-                let (fields, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Brace, tts) => {
+                let (fields, _) = Parser::new_inner(loc, tts)
+                                         .eat_many_comma_tail_end(
                     StructField::Unknow,
                     Parser::eat_struct_field,
                 );
@@ -960,8 +972,9 @@ impl<'t> Parser<'t> {
                 sym!("..."), lit!(lit2) => Pat::Range(lit, lit2),
                 _ => Pat::Literal(lit),
             },
-            tree!(_, delim: Paren, tts) => {
-                let (mut v, tail) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Paren, tts) => {
+                let (mut v, tail) = Parser::new_inner(loc, tts)
+                                           .eat_many_comma_tail_end(
                     Pat::Unknow,
                     Parser::eat_pat,
                 );
@@ -992,20 +1005,22 @@ impl<'t> Parser<'t> {
     fn eat_pat_pathy(&mut self) -> Pat<'t> {
         let name = self.eat_path();
         match_eat!{ self.0;
-            tree!(_, delim: Paren, tts) => {
-                let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Paren, tts) => {
+                let (v, _) = Parser::new_inner(loc, tts)
+                                    .eat_many_comma_tail_end(
                     Pat::Unknow,
                     Parser::eat_pat,
                 );
                 Pat::DestructTuple{ name, elems: v }
             },
-            tree!(_, delim: Brace, mut tts) => {
+            tree!(loc, delim: Brace, mut tts) => {
                 let ellipsis = match tts.last() {
                     Some(&sym!("..")) => true,
                     _ => false,
                 };
                 if ellipsis { tts.pop(); }
-                let (v, _) = Parser::new(tts).eat_many_comma_tail_end(
+                let (v, _) = Parser::new_inner(loc, tts)
+                                    .eat_many_comma_tail_end(
                     DestructField::Unknow,
                     Parser::eat_destruct_field,
                 );
@@ -1041,8 +1056,9 @@ impl<'t> Parser<'t> {
             ident!("_") => Ty::Hole,
             sym!("!") => Ty::Never,
             kw!("Self") => Ty::Self_,
-            tree!(_, delim: Paren, tts) => {
-                let (mut v, tail) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Paren, tts) => {
+                let (mut v, tail) = Parser::new_inner(loc, tts)
+                                           .eat_many_comma_tail_end(
                     Ty::Unknow,
                     |p| p.eat_ty(true),
                 );
@@ -1052,8 +1068,8 @@ impl<'t> Parser<'t> {
                     Ty::Tuple(v)
                 }
             },
-            tree!(_, delim: Bracket, tts) => {
-                let mut p = Parser::new(tts);
+            tree!(loc, delim: Bracket, tts) => {
+                let mut p = Parser::new_inner(loc, tts);
                 let ty = Box::new(p.eat_ty(true));
                 match_eat!{ p.0;
                     sym!(";") => {
@@ -1142,8 +1158,9 @@ impl<'t> Parser<'t> {
     fn eat_ty_apply(&mut self) -> TyApply<'t> {
         let name = self.eat_path();
         match_eat!{ self.0;
-            tree!(_, delim: Paren, tts) => {
-                let (args, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Paren, tts) => {
+                let (args, _) = Parser::new_inner(loc, tts)
+                                       .eat_many_comma_tail_end(
                     Ty::Unknow,
                     |p| p.eat_ty(true),
                 );
@@ -1177,8 +1194,9 @@ impl<'t> Parser<'t> {
     /// Eat the tail (after `fn`) and return a function type.
     fn eat_func_ty(&mut self, unsafe_: OptSym<'t>, abi: ABI<'t>) -> Ty<'t> {
         let (args, va) = match_eat!{ self.0;
-            tree!(_, delim: Paren, tts) => {
-                let (args, va, _) = Parser::new(tts).eat_many_tail_last(
+            tree!(loc, delim: Paren, tts) => {
+                let (args, va, _) = Parser::new_inner(loc, tts)
+                                           .eat_many_tail_last(
                     symbol_type!(","),
                     |p| p.is_end(),
                     FuncTyParam::Unknow,
@@ -1393,7 +1411,7 @@ impl<'t> Parser<'t> {
                     let comp = self.eat_path_comp();
                     match_eat!{ self.0;
                         tree!(loc, delim: Paren, tts) => {
-                            let (args, _) = Parser::new(tts)
+                            let (args, _) = Parser::new_inner(loc, tts)
                                                    .eat_many_comma_tail_end(
                                 Expr::Unknow,
                                 |p| p.eat_expr(false, true),
@@ -1412,7 +1430,7 @@ impl<'t> Parser<'t> {
                     }
                 },
                 tree!(loc, delim: Bracket, tts) => {
-                    let mut p = Parser::new(tts);
+                    let mut p = Parser::new_inner(loc, tts);
                     let brk_loc = &loc[..1]; // `[`
                     let index = Box::new(p.eat_expr(false, true));
                     let unknow = p.rest();
@@ -1425,7 +1443,7 @@ impl<'t> Parser<'t> {
                 },
                 tree!(loc, delim: Paren, tts) => {
                     let par_loc = &loc[..1]; // `(`
-                    let (args, _) = Parser::new(tts).eat_many_comma_tail_end(
+                    let (args, _) = Parser::new_inner(loc, tts).eat_many_comma_tail_end(
                         Expr::Unknow,
                         |p| p.eat_expr(false, true),
                     );
@@ -1439,8 +1457,8 @@ impl<'t> Parser<'t> {
     /// Eat and return a block expression, or return None.
     fn eat_opt_block_expr(&mut self) -> Option<Expr<'t>> {
         match_eat!{ self.0;
-            tree!(_, delim: Brace, tts) =>
-                Some(Parser::new(tts).eat_block_expr_inner_end()),
+            tree!(loc, delim: Brace, tts) =>
+                Some(Parser::new_inner(loc, tts).eat_block_expr_inner_end()),
             _ => None,
         }
     }
@@ -1460,8 +1478,9 @@ impl<'t> Parser<'t> {
         }
         match_eat!{ self.0;
             lit!(lit) => Expr::Literal(lit),
-            tree!(_, delim: Paren, tts) => {
-                let (mut v, tail) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Paren, tts) => {
+                let (mut v, tail) = Parser::new_inner(loc, tts)
+                                           .eat_many_comma_tail_end(
                     Expr::Unknow,
                     |p| p.eat_expr(false, true),
                 );
@@ -1471,10 +1490,10 @@ impl<'t> Parser<'t> {
                     Expr::Tuple(v)
                 }
             },
-            tree!(_, delim: Bracket, tts) =>
-                Parser::new(tts).eat_array_expr_inner_end(),
-            tree!(_, delim: Brace, tts) =>
-                Parser::new(tts).eat_block_expr_inner_end(),
+            tree!(loc, delim: Bracket, tts) =>
+                Parser::new_inner(loc, tts).eat_array_expr_inner_end(),
+            tree!(loc, delim: Brace, tts) =>
+                Parser::new_inner(loc, tts).eat_block_expr_inner_end(),
             kw!("unsafe") =>
                 Expr::Unsafe(self.eat_opt_block_expr().map(Box::new)),
             sym!("|", loc) =>
@@ -1511,9 +1530,10 @@ impl<'t> Parser<'t> {
                 let name = self.eat_path();
                 let opt_struct = if struct_expr {
                     match_eat!{ self.0;
-                        tree!(_, delim: Brace, tts) => {
+                        tree!(loc, delim: Brace, tts) => {
                             let (fields, base) =
-                                Parser::new(tts).eat_expr_struct_inner_end();
+                                Parser::new_inner(loc, tts)
+                                       .eat_expr_struct_inner_end();
                             Some((Some(fields), base))
                         },
                         _ => None,
@@ -1603,8 +1623,9 @@ impl<'t> Parser<'t> {
     fn eat_match_tail(&mut self, kw_loc: LocStr<'t>) -> Expr<'t> {
         let expr = Box::new(self.eat_expr(false, false));
         let arms = match_eat!{ self.0;
-            tree!(_, delim: Brace, tts) => {
-                let (arms, _) = Parser::new(tts).eat_many_comma_tail_end(
+            tree!(loc, delim: Brace, tts) => {
+                let (arms, _) = Parser::new_inner(loc, tts)
+                                       .eat_many_comma_tail_end(
                     MatchArm::Unknow,
                     |p| {
                         let pats = p.eat_many_sep(

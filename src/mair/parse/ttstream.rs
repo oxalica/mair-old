@@ -1,24 +1,26 @@
-//! A stream-like container supporting reading, looking nth ahead and
-//! putbacking (unread) elements which will be read next time.
-
 use std::ptr::copy_nonoverlapping;
 use std::mem::{uninitialized, forget};
+use super::ast::TT;
 
 #[derive(Clone)]
-pub struct PutbackStream<T>(Vec<T>);
+pub struct TTStream<'a>(Vec<TT<'a>>, &'a str);
 
-impl<T> PutbackStream<T> {
-    pub fn new(mut tts: Vec<T>) -> Self {
+impl<'a> TTStream<'a> {
+    pub fn new(mut tts: Vec<TT<'a>>, begin_pos: &'a str) -> Self {
         tts.reverse();
-        PutbackStream(tts)
+        TTStream(tts, begin_pos)
     }
 
-    pub fn rest(mut self) -> Vec<T> {
+    pub fn prev_last_pos(&self) -> &'a str {
+        self.1
+    }
+
+    pub fn rest(mut self) -> Vec<TT<'a>> {
         self.0.reverse();
         self.0
     }
 
-    pub fn peek(&self, index: usize) -> Option<&T> {
+    pub fn peek(&self, index: usize) -> Option<&TT<'a>> {
         let len = self.0.len();
         if index < len {
             unsafe{ Some(self.0.get_unchecked(len - 1 - index)) }
@@ -27,11 +29,12 @@ impl<T> PutbackStream<T> {
         }
     }
 
-    pub fn putback(&mut self, value: T) {
+    pub fn putback(&mut self, value: TT<'a>) {
+        self.1 = &value.1[..0]; // at the begin
         self.0.push(value);
     }
 
-    pub unsafe fn get_unremoved(&self, index: usize) -> Option<T> {
+    pub unsafe fn get_unremoved(&self, index: usize) -> Option<TT<'a>> {
         self.peek(index).map(|p| {
             let mut x = uninitialized();
             copy_nonoverlapping(p, &mut x, 1);
@@ -50,11 +53,17 @@ impl<T> PutbackStream<T> {
     }
 }
 
-impl<T> Iterator for PutbackStream<T> {
-    type Item = T;
+impl<'a> Iterator for TTStream<'a> {
+    type Item = TT<'a>;
 
-    fn next(&mut self) -> Option<T> {
-        self.0.pop()
+    fn next(&mut self) -> Option<TT<'a>> {
+        match self.0.pop() {
+            Some((tokk, loc)) => {
+                self.1 = &loc[loc.len()..]; // at the end
+                Some((tokk, loc))
+            },
+            None => None,
+        }
     }
 }
 
@@ -80,39 +89,4 @@ macro_rules! match_eat {
             },
         }
     };
-}
-
-#[cfg(test)]
-mod test {
-    use super::PutbackStream as S;
-
-    #[test]
-    fn test_matching() {
-        let mut s = S::new(vec![1, 20, 300]);
-        let snd = match_eat!{ s;
-            2, _ => unreachable!(),
-            1, x => x,
-            _    => unreachable!(),
-        };
-        assert_eq!(snd, 20);
-        assert_eq!(s.clone().collect::<Vec<_>>(), vec![300]);
-
-        s.putback(44); s.putback(55); s.putback(66);
-        assert_eq!(s.clone().collect::<Vec<_>>(), vec![66, 55, 44, 300]);
-
-        match_eat!{ s;
-            _, _, _, _, _ => unreachable!(),
-            a, 55 => {
-                assert_eq!(a, 66);
-                assert_eq!(s.clone().collect::<Vec<_>>(), vec![44, 300]);
-                assert_eq!(s.peek(1), Some(&300));
-                s.putback(0);
-                match_eat!{ s;
-                    0, 44, 300 => assert!(s.peek(0).is_none()),
-                    _          => unreachable!(),
-                }
-            },
-            _ => unreachable!(),
-        };
-    }
 }
