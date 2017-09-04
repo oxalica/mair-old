@@ -862,7 +862,12 @@ impl<'t> Parser<'t> {
             sym!(">>" , loc) => { symBack!(self.0, ">" , loc); true },
             sym!(">=" , loc) => { symBack!(self.0, "=" , loc); true },
             sym!(">>=", loc) => { symBack!(self.0, ">=", loc); true },
-            _ => false,
+            tt => { // something else
+                // TODO: fix the syntax of `match_eat!()`
+                self.0.putback(tt);
+                false
+            },
+            _ => true, // <EOF> should stop it
         }
     }
 
