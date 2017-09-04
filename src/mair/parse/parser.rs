@@ -973,6 +973,8 @@ impl<'t> Parser<'t> {
                 sym!("..."), lit!(lit2) => Pat::Range(lit, lit2),
                 _ => Pat::Literal(lit),
             },
+            sym!("&") =>
+                Pat::Ref(Box::new(self.eat_pat())),
             tree!(loc, delim: Paren, tts) => {
                 let (mut v, tail) = Parser::new_inner(loc, tts)
                                            .eat_many_comma_tail_end(
