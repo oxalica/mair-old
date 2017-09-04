@@ -75,6 +75,11 @@ fn tts(input: &str) -> Result<Vec<TT>, UnmatchedDelimError> {
     parse_tts(input, &ltoks)
 }
 
+fn parse(input: &str) -> Mod {
+    let tts_ = tts(input).unwrap();
+    parse_crate(input, tts_)
+}
+
 #[test]
 fn parse_test() {
     test_dir_lines("lexer_unit", |f, s| {
@@ -88,5 +93,8 @@ fn parse_test() {
     });
     test_dir("tts_large", |f, s| {
         writeln!(f, "{:?}", tts(s))
+    });
+    test_dir("parser_large", |f, s| {
+        writeln!(f, "{:?}", parse(s))
     });
 }

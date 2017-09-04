@@ -333,7 +333,9 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
     Struct      { ty: Box<Ty<'a>>
                 , fields: Option<Vec<ExprStructField<'a>>>
                 , base: Option<Box<Expr<'a>>> },
-    Block       { stmts: Vec<Stmt<'a>>, ret: Option<Box<Expr<'a>>> },
+    Block       { inner_attrs: Vec<Attr<'a>>
+                , stmts: Vec<Stmt<'a>>
+                , ret: Option<Box<Expr<'a>>> },
     Unsafe      (Option<Box<Expr<'a>>>),
     MemberCall  { obj:  Box<Expr<'a>>
                 , func: PathComp<'a>
@@ -429,6 +431,8 @@ pub enum Pat<'a> {
     Literal       (Literal<'a>),
     /// A range patterns. eg. `1...2`, `'a'...'z'`
     Range         (Literal<'a>, Literal<'a>),
+    /// A reference.
+    Ref           (Box<Pat<'a>>),
     /// A tuple. eg. `(_, _)`
     Tuple         (Vec<Pat<'a>>),
     /// A pattern inside (redundant) paren.

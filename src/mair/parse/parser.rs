@@ -307,6 +307,7 @@ impl<'t> Parser<'t> {
     fn is_expr_begin(&self) -> bool {
         match self.0.peek(0) {
             Some(&lit!(_)) |
+            Some(&lt!(_)) | // 'a: loop {}
             Some(&kw!("unsafe")) |
             Some(&kw!("super")) |
             Some(&kw!("self")) |
@@ -861,7 +862,12 @@ impl<'t> Parser<'t> {
             sym!(">>" , loc) => { symBack!(self.0, ">" , loc); true },
             sym!(">=" , loc) => { symBack!(self.0, "=" , loc); true },
             sym!(">>=", loc) => { symBack!(self.0, ">=", loc); true },
-            _ => false,
+            tt => { // something else
+                // TODO: fix the syntax of `match_eat!()`
+                self.0.putback(tt);
+                false
+            },
+            _ => true, // <EOF> should stop it
         }
     }
 
@@ -973,6 +979,8 @@ impl<'t> Parser<'t> {
                 sym!("..."), lit!(lit2) => Pat::Range(lit, lit2),
                 _ => Pat::Literal(lit),
             },
+            sym!("&") =>
+                Pat::Ref(Box::new(self.eat_pat())),
             tree!(loc, delim: Paren, tts) => {
                 let (mut v, tail) = Parser::new_inner(loc, tts)
                                            .eat_many_comma_tail_end(
@@ -1660,11 +1668,16 @@ impl<'t> Parser<'t> {
     /// Eat the inner of a block expression to the end, and return the block
     /// expression.
     fn eat_block_expr_inner_end(mut self) -> Expr<'t> {
+        let inner_attrs = self.eat_inner_attrs();
         let mut stmts = vec![];
-        let mut ret = None;
+        let mut ret: Option<Expr> = None;
         while !self.is_end() {
             if let Some(expr) = ret.take() { // .. <expr> |;
-                let semi = self.eat_semi();
+                let semi = if expr.is_item_like() {
+                    Ok(()) // don't need `;`
+                } else {
+                    self.eat_semi()
+                };
                 let stmt = match expr {
                     Expr::PluginInvoke(p) =>
                         Stmt::PluginInvoke{ p, semi },
@@ -1700,7 +1713,7 @@ impl<'t> Parser<'t> {
                 },
             }}
         }
-        Expr::Block{ stmts, ret: ret.map(Box::new) }
+        Expr::Block{ inner_attrs, stmts, ret: ret.map(Box::new) }
     }
 
     /// Eat the inner of a array literal or filled array to the end, and return
