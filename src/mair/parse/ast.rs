@@ -1,6 +1,6 @@
 use std::cmp::Eq;
 use std::rc::Rc;
-use super::lexer::{Loc, TokenKind};
+use super::lexer::{LocStr, TokenKind};
 use super::{imax, fmax};
 
 /// A module, a crate, or a rust source file.
@@ -461,7 +461,7 @@ pub enum TTKind<'a> {
     Tree{ delim: Delimiter, tts: Vec<TT<'a>> },
 }
 
-pub type TT<'a> = (TTKind<'a>, Loc);
+pub type TT<'a> = (TTKind<'a>, LocStr<'a>);
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum UnaryOp {
