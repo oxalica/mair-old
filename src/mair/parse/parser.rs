@@ -307,6 +307,7 @@ impl<'t> Parser<'t> {
     fn is_expr_begin(&self) -> bool {
         match self.0.peek(0) {
             Some(&lit!(_)) |
+            Some(&lt!(_)) | // 'a: loop {}
             Some(&kw!("unsafe")) |
             Some(&kw!("super")) |
             Some(&kw!("self")) |
