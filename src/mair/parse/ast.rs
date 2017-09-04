@@ -13,51 +13,50 @@ pub struct Mod<'a> {
 /// An Item, which is the component of a crate/module.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Item<'a> {
-    pub outer_attrs:  Vec<Attr<'a>>,
-    pub is_pub:       bool,
-    pub detail:       ItemKind<'a>,
+    pub outer_attrs: Vec<Attr<'a>>,
+    pub pub_:        OptSym<'a>,
+    pub detail:      ItemKind<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ItemKind<'a> {
     // https://doc.rust-lang.org/reference/items.html#items
     /// `extern` `crate` <name> `;`
-    ExternCrate { name: Ident<'a>, semi: bool },
+    ExternCrate { name: Ident<'a>, semi: Semi<'a> },
     /// `use <path>::*;`
-    UseAll      { path: Path<'a>, semi: bool },
+    UseAll      { path: Path<'a>, semi: Semi<'a> },
     /// `use <path>::<name> [as <alias>];`
-    UseOne      { path: Path<'a>, name: UseName<'a>, semi: bool },
+    UseOne      { path: Path<'a>, name: UseName<'a>, semi: Semi<'a> },
     /// `use <path>::{<name1> [as <alias1>], ... };`
-    UseSome     { path: Path<'a>, names: Vec<UseName<'a>>, semi: bool },
+    UseSome     { path: Path<'a>, names: Vec<UseName<'a>>, semi: Semi<'a> },
     /// `mod <name>;`
-    ExternMod   { name: Ident<'a>, semi: bool },
+    ExternMod   { name: Ident<'a>, semi: Semi<'a> },
     /// `mod <name> { <item1> ... }`
-    Mod         { name:  Ident<'a>
-                , inner: Mod<'a> },
+    Mod         { name:  Ident<'a>, inner: Mod<'a> },
     /// `fn <sig>;`
-    FuncDecl    { sig: Box<FuncSig<'a>>, semi: bool },
+    FuncDecl    { sig: Box<FuncSig<'a>>, semi: Semi<'a> },
     /// `fn <sig> <body>`
     /// The `body` will be always an `Expr::Block`.
     Func        { sig: Box<FuncSig<'a>>, body: Box<Expr<'a>> },
     /// `extern [abi] { <item1> ... }`
-    Extern      { abi: ABI, inner: Option<Mod<'a>> },
+    Extern      { abi: ABI<'a>, inner: Option<Mod<'a>> },
     /// `type <alias> <template> [where_clause] [= <origin>];`
     Type        { alias:  Ident<'a>
                 , templ:  Template<'a>
                 , whs:    OptWhere<'a>
                 , origin: Option<Box<Ty<'a>>>
-                , semi:   bool },
+                , semi:   Semi<'a> },
     /// `struct <name> <template> [where_clause];`
     StructUnit  { name:  Ident<'a>
                 , templ: Template<'a>
                 , whs:   OptWhere<'a>
-                , semi:  bool },
+                , semi:  Semi<'a> },
     /// `struct <name> <template> (<elem1>, ...) [where_clause];`
     StructTuple { name:  Ident<'a>
                 , templ: Template<'a>
                 , elems: Vec<StructTupleElem<'a>>
                 , whs:   OptWhere<'a>
-                , semi:  bool },
+                , semi:  Semi<'a> },
     /// `struct <name> <template> [where_clause] { <field1>, ... }`
     StructFields{ name:   Ident<'a>
                 , templ:  Template<'a>
@@ -72,12 +71,12 @@ pub enum ItemKind<'a> {
     Const       { name: Ident<'a>
                 , ty:   Option<Box<Ty<'a>>>
                 , val:  Option<Box<Expr<'a>>>
-                , semi: bool },
+                , semi: Semi<'a> },
     /// `static <name>: <ty> = <val>;`
     Static      { name: Ident<'a>
                 , ty:   Option<Box<Ty<'a>>>
                 , val:  Option<Box<Expr<'a>>>
-                , semi: bool },
+                , semi: Semi<'a> },
     /// `trait <name> <template> [where_clause] { <item1> ... }`
     Trait       { name:  Ident<'a>
                 , templ: Template<'a>
@@ -103,7 +102,7 @@ pub enum ItemKind<'a> {
 /// A single name referred in a `use` declaration.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum UseName<'a> {
-    Self_,
+    Self_ (LocStr<'a>),
     Name  { name: Ident<'a>, alias: Option<Ident<'a>> },
     Unknow(TT<'a>),
 }
@@ -111,7 +110,7 @@ pub enum UseName<'a> {
 /// An element of a tuple-like struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum StructTupleElem<'a> {
-    Elem  { attrs: Vec<Attr<'a>>, is_pub: bool, ty: Ty<'a> },
+    Elem  { attrs: Vec<Attr<'a>>, pub_: OptSym<'a>, ty: Ty<'a> },
     Unknow(TT<'a>),
 }
 
@@ -119,9 +118,9 @@ pub enum StructTupleElem<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum StructField<'a> {
     Field { attrs: Vec<Attr<'a>>
-          , is_pub: bool
-          , name: Ident<'a>
-          , ty: Option<Ty<'a>> },
+          , pub_:  OptSym<'a>
+          , name:  Ident<'a>
+          , ty:    Option<Ty<'a>> },
     Unknow(TT<'a>),
 }
 
@@ -148,8 +147,8 @@ pub struct Path<'a> {
 /// A path component, maybe with template hint (if any).
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PathComp<'a> {
-    Self_,
-    Super,
+    Self_(LocStr<'a>),
+    Super(LocStr<'a>),
     Name { name: Ident<'a>, hint: Option<Vec<TyHintArg<'a>>> },
 }
 
@@ -185,19 +184,22 @@ pub enum Restrict<'a> {
 /// argument names and the function type.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FuncSig<'a> {
-    pub is_unsafe: bool,
-    pub abi:       ABI,
-    pub name:      Ident<'a>,
-    pub templ:     Template<'a>,
-    pub args:      Option<Vec<FuncParam<'a>>>,
-    pub is_va:     bool,
-    pub ret_ty:    Option<Box<Ty<'a>>>,
-    pub whs:       OptWhere<'a>,
+    pub unsafe_: OptSym<'a>,
+    pub abi:     ABI<'a>,
+    pub name:    Ident<'a>,
+    pub templ:   Template<'a>,
+    pub args:    Option<Vec<FuncParam<'a>>>,
+    pub va:      OptSym<'a>,
+    pub ret_ty:  Option<Box<Ty<'a>>>,
+    pub whs:     OptWhere<'a>,
 }
 
 /// The signature of a lambda function.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LambdaSig<'a> {
+    pub move_:  OptSym<'a>,
+    /// The location of capture list including `|`.
+    pub loc:    LocStr<'a>,
     pub args:   Vec<FuncParam<'a>>,
     pub ret_ty: Option<Box<Ty<'a>>>,
 }
@@ -205,8 +207,8 @@ pub struct LambdaSig<'a> {
 /// A parameter of a function.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum FuncParam<'a> {
-    SelfMove{ is_mut: bool },
-    SelfRef { is_mut: bool },
+    SelfMove{ mut_: OptSym<'a> },
+    SelfRef { mut_: OptSym<'a> },
     SelfAs  (Ty<'a>),
     Bind    { pat: Pat<'a>, ty: Option<Box<Ty<'a>>> },
     Unknow  (TT<'a>),
@@ -215,11 +217,11 @@ pub enum FuncParam<'a> {
 /// The type of a function.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FuncTy<'a> {
-    pub is_unsafe: bool,
-    pub abi:       ABI,
-    pub args:      Option<Vec<FuncTyParam<'a>>>,
-    pub is_va:     bool,
-    pub ret_ty:    Option<Box<Ty<'a>>>,
+    pub unsafe_: OptSym<'a>,
+    pub abi:     ABI<'a>,
+    pub args:    Option<Vec<FuncTyParam<'a>>>,
+    pub va:      OptSym<'a>,
+    pub ret_ty:  Option<Box<Ty<'a>>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -230,10 +232,10 @@ pub enum FuncTyParam<'a> {
 
 /// The ABI of a function or an `extern` block.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ABI {
+pub enum ABI<'a> {
     Normal,
     Extern,
-    Specific(Rc<String>),
+    Specific{ loc: LocStr<'a>, abi: Rc<String> },
 }
 
 /// A type.
@@ -256,9 +258,11 @@ pub enum Ty<'a> {
     /// A type inside paren.
     Paren  (Box<Ty<'a>>),
     /// Reference.
-    Ref    { lt: Option<Lifetime<'a>>, is_mut: bool, ty: Box<Ty<'a>> },
+    Ref    { lt:   Option<Lifetime<'a>>
+           , mut_: OptSym<'a>
+           , ty:   Box<Ty<'a>> },
     /// Pointer.
-    Ptr    { is_mut: bool, ty: Box<Ty<'a>> },
+    Ptr    { mut_: OptSym<'a>, ty: Box<Ty<'a>> },
     /// Slice.
     Slice  { ty: Box<Ty<'a>>, unknow: Vec<TT<'a>> },
     /// Array.
@@ -289,7 +293,7 @@ pub enum TyApplyArg<'a> {
 /// An attribute.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Attr<'a> {
-    Doc (&'a str),
+    Doc { loc: LocStr<'a>, doc: &'a str },
     Meta{ meta: Meta<'a>, unknow: Vec<TT<'a>> },
 }
 
@@ -313,9 +317,9 @@ pub enum Stmt<'a> {
     Let         { pat:  Pat<'a>
                 , ty:   Option<Box<Ty<'a>>>
                 , expr: Option<Box<Expr<'a>>>
-                , semi: bool},
-    Expr        { expr: Expr<'a>, semi: bool },
-    PluginInvoke{ p: PluginInvoke<'a>, semi: bool },
+                , semi: Semi<'a> },
+    Expr        { expr: Expr<'a>, semi: Semi<'a> },
+    PluginInvoke{ p: PluginInvoke<'a>, semi: Semi<'a> },
     Unknow      (TT<'a>),
 }
 
@@ -333,10 +337,12 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
     Unsafe      (Option<Box<Expr<'a>>>),
     MemberCall  { obj:  Box<Expr<'a>>
                 , func: PathComp<'a>
+                , par_loc: LocStr<'a>
                 , args: Vec<Expr<'a>> },
     StructField { obj: Box<Expr<'a>>, field: PathComp<'a> },
-    TupleField  { obj: Box<Expr<'a>>, index: imax },
+    TupleField  { obj: Box<Expr<'a>>, ind_loc: LocStr<'a>, index: imax },
     Index       { obj: Box<Expr<'a>>
+                , brk_loc: LocStr<'a>
                 , index: Box<Expr<'a>>
                 , unknow: Vec<TT<'a>> },
     ArrayFill   { elem: Box<Expr<'a>>
@@ -344,17 +350,24 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
                 , unknow: Vec<TT<'a>> },
     ArrayLit    (Vec<Expr<'a>>),
     // Range is BinaryOp
-    UnaryOp     (UnaryOp, Box<Expr<'a>>),
-    As          { expr: Box<Expr<'a>>, ty: Box<Ty<'a>> },
-    Colon       { expr: Box<Expr<'a>>, ty: Box<Ty<'a>> },
-    BinaryOp    (BinaryOp, Box<Expr<'a>>, Box<Expr<'a>>),
-    Call        { func: Box<Expr<'a>>, args: Vec<Expr<'a>> },
-    Lambda      { is_move: bool
-                , sig: Box<LambdaSig<'a>>
+    UnaryOp     { op: UnaryOp, op_loc: LocStr<'a>, expr: Box<Expr<'a>> },
+    As          { expr: Box<Expr<'a>>, kw_loc: LocStr<'a>, ty: Box<Ty<'a>> },
+    Colon       { expr: Box<Expr<'a>>, kw_loc: LocStr<'a>, ty: Box<Ty<'a>> },
+    BinaryOp    { op: BinaryOp
+                , op_loc: LocStr<'a>
+                , l: Box<Expr<'a>>
+                , r: Box<Expr<'a>> },
+    Call        { func: Box<Expr<'a>>
+                , par_loc: LocStr<'a>
+                , args: Vec<Expr<'a>> },
+    Lambda      { sig:  Box<LambdaSig<'a>>
                 , body: Option<Box<Expr<'a>>> },
-    Break       { label: Option<Lifetime<'a>>, expr: Option<Box<Expr<'a>>> },
-    Continue    { label: Option<Lifetime<'a>> },
-    Loop        { label: Option<Lifetime<'a>>, body: Option<Box<Expr<'a>>> },
+    Break       { label:  Option<Lifetime<'a>>
+                , kw_loc: LocStr<'a>
+                , expr:  Option<Box<Expr<'a>>> },
+    Continue    { label: Option<Lifetime<'a>>, kw_loc: LocStr<'a> },
+    Loop        { label:  Option<Lifetime<'a>>
+                , body:   Option<Box<Expr<'a>>> },
     While       { label: Option<Lifetime<'a>>
                 , cond: Box<Expr<'a>>
                 , body: Option<Box<Expr<'a>>> },
@@ -375,8 +388,10 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
                 , match_expr: Option<Box<Expr<'a>>>
                 , then_expr:  Option<Box<Expr<'a>>>
                 , else_expr:  Option<Option<Box<Expr<'a>>>> },
-    Match       { expr: Box<Expr<'a>>, arms: Option<Vec<MatchArm<'a>>> },
-    Return      (Option<Box<Expr<'a>>>),
+    Match       { kw_loc: LocStr<'a>
+                , expr:   Box<Expr<'a>>
+                , arms:   Option<Vec<MatchArm<'a>>> },
+    Return      { kw_loc: LocStr<'a>, expr: Option<Box<Expr<'a>>> },
     PluginInvoke(PluginInvoke<'a>),
     Unknow      (TT<'a>),
 }
@@ -402,12 +417,12 @@ pub enum Pat<'a> {
     /// The hole `_`.
     Hole,
     /// A pattern with a variable bind. eg. `ref a@Some(_)`
-    /// If `pat` is None, not `is_ref` and not `is_mut, it can be either a
+    /// If `pat`, `ret_`, `mut_` are all None, it can be either a
     /// variant of an enum or a bind matching everything, like `None`.
-    BindLike      { name:   Ident<'a>
-                  , is_ref: bool
-                  , is_mut: bool
-                  , pat:    Option<Box<Pat<'a>>> },
+    BindLike      { name: Ident<'a>
+                  , ref_: OptSym<'a>
+                  , mut_: OptSym<'a>
+                  , pat:  Option<Box<Pat<'a>>> },
     /// A path to a variant of unit-like enum or unit struct.
     Path          (Path<'a>),
     /// An literal. eg. `123`
@@ -501,8 +516,10 @@ pub enum Literal<'a> {
     Bool     (bool),
 }
 
+pub type Semi<'a> = Result<(), LocStr<'a>>;
+pub type OptSym<'a> = Option<LocStr<'a>>;
+pub type Ident<'a> = Result<LocStr<'a>, LocStr<'a>>;
 pub type Lifetime<'a> = &'a str;
-pub type Ident<'a> = Option<&'a str>;
 
 impl<'a> Eq for Literal<'a> {} // The float value is never NaN.
 
@@ -517,7 +534,10 @@ impl<'a> Ty<'a> {
     pub fn from_name(name: &'a str) -> Self {
         Ty::from_path(Path{
             is_absolute: false,
-            comps: vec![PathComp::Name{ name: Some(name), hint: None }],
+            comps: vec![PathComp::Name{
+                name: Ok(name),
+                hint: None,
+            }],
         })
     }
 
