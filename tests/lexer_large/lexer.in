@@ -1,0 +1,23 @@
+//! hugh?
+
+use std::*;
+
+/// just junk
+#[test]
+fn lexer_keyword_ident() {
+    assert_eq!(lex("_"),        Ok(vec![(Ident("_"), 0..1)]));
+    assert_eq!(lex("a"),        Ok(vec![(Ident("a"), 0..1)]));
+    assert_eq!(lex("as"),       Ok(vec![(Keyword(Kw::As), 0..2)]));
+    assert_eq!(lex("asc"),      Ok(vec![(Ident("asc"), 0..3)]));
+    assert_eq!(lex("a0__c_"),   Ok(vec![(Ident("a0__c_"), 0..6)]));
+    assert_eq!(lex("_9 a0"),    Ok(vec![(Ident("_9"), 0..2), (Ident("a0"), 3..5)]));
+    assert_eq!(lex("macro_rules"), Ok(vec![(Ident("macro_rules"), 0..11)]));
+}
+
+
+impl<'input> Iterator for Lexer<'input> {
+    /*!no real impl here*/
+}
+
+symbol_test!{ >>>=>>====>= }
+

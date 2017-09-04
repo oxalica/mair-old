@@ -1763,8 +1763,16 @@ impl<'t> Parser<'t> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::super::lexer::test::lex;
-    use super::super::lexer::SymbolType as Sym;
+    use super::super::error::*;
+    use super::super::lexer::{Lexer, SymbolType as Sym};
+
+    fn lex(input: &str) -> Result<Vec<Token>, LexicalError<usize>> {
+        let mut v = vec![];
+        for c in Lexer::new(input) {
+            v.push(c?);
+        }
+        Ok(v)
+    }
 
     fn tts(input: &str) -> Result<Vec<TT>, UnmatchedDelimError> {
         let ltoks = lex(input).unwrap();
