@@ -1,0 +1,5 @@
+Ok([(Lifetime("_"), 0..2)])
+Ok([(Literal(CharLike { is_byte: false, ch: 'a' }), 0..3), (Ident("a"), 3..4)])
+Ok([(Lifetime("a"), 0..2), (Lifetime("a"), 3..5)])
+Ok([(Literal(CharLike { is_byte: false, ch: ' ' }), 0..3), (Lifetime("a"), 4..6)])
+Err(LexicalError { pos: 0, kind: UnknowToken })
