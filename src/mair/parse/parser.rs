@@ -1670,10 +1670,14 @@ impl<'t> Parser<'t> {
     fn eat_block_expr_inner_end(mut self) -> Expr<'t> {
         let inner_attrs = self.eat_inner_attrs();
         let mut stmts = vec![];
-        let mut ret = None;
+        let mut ret: Option<Expr> = None;
         while !self.is_end() {
             if let Some(expr) = ret.take() { // .. <expr> |;
-                let semi = self.eat_semi();
+                let semi = if expr.is_item_like() {
+                    Ok(()) // don't need `;`
+                } else {
+                    self.eat_semi()
+                };
                 let stmt = match expr {
                     Expr::PluginInvoke(p) =>
                         Stmt::PluginInvoke{ p, semi },
