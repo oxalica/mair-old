@@ -1,0 +1,4 @@
+Ok([(Token(Symbol(Mul)), 0..1), (Tree { delim: Paren, tts: [(Token(Symbol(Mul)), 2..3), (Tree { delim: Brace, tts: [(Token(Symbol(Mul)), 5..6)] }, 4..7), (Tree { delim: Bracket, tts: [] }, 7..9)] }, 1..10)])
+Err(UnmatchedDelimError(1..2))
+Err(UnmatchedDelimError(1..2))
+Err(UnmatchedDelimError(1..2))
