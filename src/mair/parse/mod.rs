@@ -1,4 +1,4 @@
-#[macro_use] mod putback_stream; // match_eat!()
+#[macro_use] mod ttstream; // match_eat!()
 pub mod ast;
 pub mod error;
 #[macro_use] pub mod lexer; // symbol_type!(), keyword_type!()
