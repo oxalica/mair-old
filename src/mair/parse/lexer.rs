@@ -1,17 +1,15 @@
 #![cfg_attr(feature="clippy", allow(never_loop))] // TODO: https://github.com/Manishearth/rust-clippy/issues/1586
 
 use std::rc::Rc;
-use std::ops::Range;
 use std::collections::HashMap;
 use std::char::from_u32;
 use regex::{Regex, Captures, escape};
-use super::{imax, fmax, str_ptr_diff};
+use super::{imax, fmax};
 use super::ast::{Literal as Lit, Ty, Delimiter};
 use super::error::{LexicalError, LexicalErrorKind};
 
-pub type Pos = usize;
-pub type Loc = Range<Pos>;
-pub type Token<'a> = (TokenKind<'a>, Loc);
+pub type LocStr<'a> = &'a str;
+pub type Token<'a> = (TokenKind<'a>, LocStr<'a>);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TokenKind<'input> {
@@ -43,7 +41,6 @@ struct Tokenizer<'input> {
 
 /// An iterator over `str` producing `TokenKind`.
 pub struct Lexer<'input> {
-    source: &'input str,
     tokenizer: Tokenizer<'input>,
 }
 
@@ -440,7 +437,8 @@ fn parse_str_string(source: &str, is_bytestr: bool, is_raw: bool)
 }
 
 impl<'input> Iterator for Tokenizer<'input> {
-    type Item = Result<Option<(TokenKind<'input>, &'input str)>, LexicalError<&'input str>>;
+    type Item =
+        Result<Option<(TokenKind<'input>, &'input str)>, LexicalError<'input>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         use self::TokenKind::*;
@@ -511,39 +509,31 @@ impl<'input> Iterator for Tokenizer<'input> {
             match f() {
                 Ok(None)        => Some(Ok(None)),
                 Ok(Some(tokty)) => Some(Ok(Some((tokty, &slast[..slast.len() - self.rest.len()])))),
-                Err(e)          => Some(Err(LexicalError{ pos: slast, kind: e })),
+                Err(e)          => Some(Err(LexicalError{ loc: slast, kind: e })),
             }
         } else { // regex match fails
-            Some(Err(LexicalError{ pos: self.rest, kind: UnknowToken}))
+            Some(Err(LexicalError{ loc: self.rest, kind: UnknowToken}))
         }
     }
 }
 
 impl<'input> Lexer<'input> {
     pub fn new(input: &'input str) -> Self {
-        Lexer{ source: input, tokenizer: Tokenizer::new(input) }
-    }
-
-    /// Get the start and end index of a subslice of `source`.
-    /// Panic if `s` is not a subslice of `source`.
-    fn pos(&self, s: &'input str) -> Loc {
-        let p = str_ptr_diff(s, self.source);
-        assert!(0 <= p && p as usize <= self.source.len());
-        (p as usize)..(p as usize + s.len())
+        Lexer{ tokenizer: Tokenizer::new(input) }
     }
 }
 
 impl<'input> Iterator for Lexer<'input> {
-    type Item = Result<Token<'input>, LexicalError<usize>>;
+    type Item = Result<Token<'input>, LexicalError<'input>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             return match self.tokenizer.next() {
                 None                                 => None,
                 Some(Ok(None))                       => continue, // skip comment as space
-                Some(Ok(Some((tokty, s))))           => Some(Ok((tokty, self.pos(s)))),
-                Some(Err(LexicalError{ pos, kind })) =>
-                    Some(Err(LexicalError{ pos: self.pos(pos).start, kind })),
+                Some(Ok(Some((tokty, s))))           => Some(Ok((tokty, s))),
+                Some(Err(LexicalError{ loc, kind })) =>
+                    Some(Err(LexicalError{ loc, kind })),
             }
         }
     }
