@@ -429,6 +429,8 @@ pub enum Pat<'a> {
     Literal       (Literal<'a>),
     /// A range patterns. eg. `1...2`, `'a'...'z'`
     Range         (Literal<'a>, Literal<'a>),
+    /// A reference.
+    Ref           (Box<Pat<'a>>),
     /// A tuple. eg. `(_, _)`
     Tuple         (Vec<Pat<'a>>),
     /// A pattern inside (redundant) paren.
