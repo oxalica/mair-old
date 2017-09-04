@@ -1663,6 +1663,7 @@ impl<'t> Parser<'t> {
     /// Eat the inner of a block expression to the end, and return the block
     /// expression.
     fn eat_block_expr_inner_end(mut self) -> Expr<'t> {
+        let inner_attrs = self.eat_inner_attrs();
         let mut stmts = vec![];
         let mut ret = None;
         while !self.is_end() {
@@ -1703,7 +1704,7 @@ impl<'t> Parser<'t> {
                 },
             }}
         }
-        Expr::Block{ stmts, ret: ret.map(Box::new) }
+        Expr::Block{ inner_attrs, stmts, ret: ret.map(Box::new) }
     }
 
     /// Eat the inner of a array literal or filled array to the end, and return
