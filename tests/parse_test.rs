@@ -62,7 +62,7 @@ fn test_dir_lines<F: Fn(&mut Write, &str) -> io::Result<()>>(dir: &str, f: F) {
     });
 }
 
-fn lex(input: &str) -> Result<Vec<Token>, LexicalError<usize>> {
+fn lex(input: &str) -> Result<Vec<Token>, LexicalError> {
     let mut v = vec![];
     for c in Lexer::new(input) {
         v.push(c?);
@@ -72,7 +72,7 @@ fn lex(input: &str) -> Result<Vec<Token>, LexicalError<usize>> {
 
 fn tts(input: &str) -> Result<Vec<TT>, UnmatchedDelimError> {
     let ltoks = lex(input).unwrap();
-    parse_tts(&ltoks)
+    parse_tts(input, &ltoks)
 }
 
 #[test]

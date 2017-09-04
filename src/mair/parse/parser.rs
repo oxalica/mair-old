@@ -7,44 +7,60 @@ use self::Delimiter::*;
 pub struct Parser<'t>(PutbackStream<TT<'t>>);
 
 /// Parse tokens into `TT`s.
-pub fn parse_tts<'a>(toks: &[Token<'a>]) -> Result<Vec<TT<'a>>, UnmatchedDelimError> {
-    let (rest, tts) = parse_tts_helper(toks)?;
+pub fn parse_tts<'t>(
+    source: &'t str,
+    toks:   &[Token<'t>],
+) -> Result<Vec<TT<'t>>, UnmatchedDelimError<'t>> {
+    let (rest, tts) = parse_tts_helper(source, toks)?;
     match rest.first() {
-        None                => Ok(tts),
-        Some(&(_, ref loc)) => Err(UnmatchedDelimError(loc.clone())),
+        None            => Ok(tts),
+        Some(&(_, loc)) => Err(UnmatchedDelimError(loc)),
     }
 }
 
-fn parse_tts_helper<'a, 'b>(mut toks: &'b [Token<'a>])
-        -> Result<(&'b [Token<'a>], Vec<TT<'a>>), UnmatchedDelimError> {
+/// Return the string range between slice `l` and slice `r` of `source`
+/// (Including `l` and `r`).
+fn str_range<'a>(source: &'a str, l: &'a str, r: &'a str) -> &'a str {
+    use super::str_ptr_diff;
+    let pl = str_ptr_diff(l, source);
+    let pr = str_ptr_diff(r, source);
+    assert!(0 <= pl && pl as usize + l.len() <= source.len());
+    assert!(0 <= pr && pr as usize + r.len() <= source.len());
+    &source[pl as usize .. pr as usize + r.len()]
+}
+
+fn parse_tts_helper<'t, 'a>(
+    source: &'t str,
+    mut toks: &'a [Token<'t>],
+) -> Result<(&'a [Token<'t>], Vec<TT<'t>>), UnmatchedDelimError<'t>> {
     let mut tts = vec![];
     loop {
         match toks.first() {
             None | Some(&(Tokk::Delimiter{ is_open: false, .. }, _)) =>
                 return Ok((toks, tts)),
-            Some(&(Tokk::Delimiter{ is_open: true, delim }, ref loc)) => {
-                let (rest, tts_inner) = parse_tts_helper(&toks[1..])?;
+            Some(&(Tokk::Delimiter{ is_open: true, delim }, loc)) => {
+                let (rest, tts_inner) = parse_tts_helper(source, &toks[1..])?;
                 toks = rest;
                 match toks.first() {
-                    None => return Err(UnmatchedDelimError(loc.clone())),
-                    Some(&(Tokk::Delimiter{ is_open: false, delim: delim2 }, ref loc2)) => {
+                    None => return Err(UnmatchedDelimError(loc)),
+                    Some(&(Tokk::Delimiter{ is_open: false, delim: delim2 }, loc2)) => {
                         toks = &toks[1..];
                         if delim == delim2 {
                             tts.push((TTKind::Tree{
                                 tts: tts_inner,
                                 delim,
-                            }, loc.start..loc2.end));
+                            }, str_range(source, loc, loc2)));
                         } else {
-                            return Err(UnmatchedDelimError(loc2.clone()));
+                            return Err(UnmatchedDelimError(loc2));
                         }
                     },
                     Some(_) => unreachable!(), // parse_tts_helper() only stops
                                                // before close delimiter or EOF
                 }
             },
-            Some(&(ref tokk, ref loc)) => {
+            Some(&(ref tokk, loc)) => {
                 toks = &toks[1..];
-                tts.push((TTKind::Token(tokk.clone()), loc.clone()));
+                tts.push((TTKind::Token(tokk.clone()), loc));
             },
         }
     }
@@ -101,7 +117,7 @@ macro_rules! symBack {
     ($s:expr, $sym:tt, $loc:expr) => {
         $s.putback((
             TTKind::Token(Tokk::Symbol(symbol_type!($sym))),
-            $loc.start+1..$loc.end,
+            &$loc[1..],
         ))
     };
 }
