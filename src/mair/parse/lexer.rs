@@ -223,7 +223,7 @@ const RESTR_NUM: &'static str = r#"(?x:
             \d[\d_]*
             (?P<num_float_like>
                 (?:\.\d[\d_]*)?
-                (?:[Ee][+-]?[\d_]+)?
+                (?:[Ee][+-]?_*\d[_\d]*)?
             )
         )
     )
