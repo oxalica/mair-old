@@ -325,6 +325,12 @@ impl<'t> Parser<'t> {
         }
     }
 
+    /// Return an empty LocStr pointing at the end of previous TT (is any),
+    /// or the beginning of source file.
+    fn prev_pos(&self) -> LocStr<'t> {
+        self.0.prev_last_pos()
+    }
+
     /// Eat inner attributes and then items to the end.
     pub fn eat_mod_end(mut self) -> Mod<'t> {
         let inner_attrs = self.eat_inner_attrs();
@@ -349,7 +355,7 @@ impl<'t> Parser<'t> {
     fn eat_ident(&mut self) -> Ident<'t> {
         match_eat!{ self.0;
             ident!(s) => Ok(s),
-            _ => Err(self.0.prev_last_pos()),
+            _ => Err(self.prev_pos()),
         }
     }
 
@@ -396,12 +402,6 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// Return an empty LocStr pointing at the end of previous TT (is any),
-    /// or the beginning of source file.
-    fn prev_pos(&self) -> LocStr<'t> {
-        unimplemented!();
-    }
-
     /// Eat and return a semicolon.
     fn eat_semi(&mut self) -> Semi<'t> {
         match_eat!{ self.0;
@@ -409,6 +409,7 @@ impl<'t> Parser<'t> {
             _ => Err(self.prev_pos()),
         }
     }
+
 
     /// Eat inner attributes as more as possible.
     fn eat_inner_attrs(&mut self) -> Vec<Attr<'t>> {
@@ -1662,7 +1663,7 @@ impl<'t> Parser<'t> {
         let mut stmts = vec![];
         let mut ret = None;
         while !self.is_end() {
-            if let Some(expr) = ret.take() {
+            if let Some(expr) = ret.take() { // .. <expr> |;
                 let semi = self.eat_semi();
                 let stmt = match expr {
                     Expr::PluginInvoke(p) =>
@@ -1670,8 +1671,9 @@ impl<'t> Parser<'t> {
                     _ => Stmt::Expr{ expr, semi },
                 };
                 stmts.push(stmt);
-            }
-            if self.is_item_begin() {
+            } else if self.eat_semi().is_ok() { // .. <expr>; |;
+                // NOP
+            } else if self.is_item_begin() {
                 stmts.push(Stmt::Item(Box::new(self.eat_item())));
             } else { match_eat!{ self.0;
                 kw!("let") => {
