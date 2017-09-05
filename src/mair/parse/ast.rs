@@ -255,7 +255,7 @@ pub enum Ty<'a> {
     Hole,
     /// The type `!`.
     Never,
-    /// The type `Self.
+    /// The type `Self`.
     Self_,
     /// An unsized type only with trait bounds.
     Traits (Vec<TyApply<'a>>),
