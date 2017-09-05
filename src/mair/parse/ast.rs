@@ -1,7 +1,17 @@
 use std::cmp::Eq;
 use std::rc::Rc;
-use super::lexer::{LocStr, TokenKind};
-use super::{imax, fmax};
+use super::lexer::TokenKind;
+pub use super::lexer::{SymbolType, KeywordType};
+
+pub type LocStr<'a> = &'a str;
+
+/// Integer type with the maximum width supported.
+#[allow(non_camel_case_types)]
+pub type imax = i64;
+
+/// Floating point type with the maximum width supported.
+#[allow(non_camel_case_types)]
+pub type fmax = f64;
 
 /// A module, a crate, or a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]

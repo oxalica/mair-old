@@ -1,4 +1,4 @@
-use super::lexer::{TokenKind as Tokk, SymbolType, Token, LocStr};
+use super::lexer::{TokenKind as Tokk, SymbolType, Token};
 use super::ast::*;
 use super::error::UnmatchedDelimError;
 use super::ttstream::TTStream;
