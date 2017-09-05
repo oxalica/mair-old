@@ -4,11 +4,9 @@ use std::rc::Rc;
 use std::collections::HashMap;
 use std::char::from_u32;
 use regex::{Regex, Captures, escape};
-use super::{imax, fmax};
-use super::ast::{Literal as Lit, Ty, Delimiter};
+use super::ast::{Literal as Lit, imax, fmax, LocStr, Ty, Delimiter};
 use super::error::{LexicalError, LexicalErrorKind};
 
-pub type LocStr<'a> = &'a str;
 pub type Token<'a> = (TokenKind<'a>, LocStr<'a>);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -51,7 +49,6 @@ macro_rules! define_symbols(
             $($tok,)+
         }
 
-        #[macro_export] // TODO: remove it
         macro_rules! symbol_type {
             $(($s) => ($crate::parse::lexer::SymbolType::$tok);)*
         }
@@ -78,7 +75,6 @@ macro_rules! define_keywords {
             $($kw,)+
         }
 
-        #[macro_export] // TODO: remove it
         macro_rules! keyword_type {
             $(($s) => ($crate::parse::lexer::KeywordType::$kw);)*
         }

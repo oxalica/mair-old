@@ -1,4 +1,4 @@
-use super::lexer::LocStr;
+use super::ast::LocStr;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct LexicalError<'a> {
