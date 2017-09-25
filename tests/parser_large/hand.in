@@ -9,6 +9,19 @@ use a::::c::{a as };
 pub pub pub extern
 extern crate
 extern {
+    const N: i32;
+    static M: i32 = 1;
+}
+
+trait Tr {
+    type T;
+}
+
+impl T for {
+    type T;
+}
+
+mod {
     type T<F> =
     type U<X, Y,
 }
