@@ -32,19 +32,19 @@ pub struct Item<'a> {
 pub enum ItemKind<'a> {
     // https://doc.rust-lang.org/reference/items.html#items
     /// `extern` `crate` <name> `;`
-    ExternCrate { name: Ident<'a>, semi: Semi<'a> },
+    ExternCrate { name: Ident<'a> },
     /// `use <path>::*;`
-    UseAll      { path: Path<'a>, semi: Semi<'a> },
+    UseAll      { path: Path<'a> },
     /// `use <path>::<name> [as <alias>];`
-    UseOne      { path: Path<'a>, name: UseName<'a>, semi: Semi<'a> },
+    UseOne      { path: Path<'a>, name: UseName<'a> },
     /// `use <path>::{<name1> [as <alias1>], ... };`
-    UseSome     { path: Path<'a>, names: Vec<UseName<'a>>, semi: Semi<'a> },
+    UseSome     { path: Path<'a>, names: Vec<UseName<'a>> },
     /// `mod <name>;`
-    ExternMod   { name: Ident<'a>, semi: Semi<'a> },
+    ExternMod   { name: Ident<'a> },
     /// `mod <name> { <item1> ... }`
     Mod         { name:  Ident<'a>, inner: Mod<'a> },
     /// `fn <sig>;`
-    FuncDecl    { sig: Box<FuncSig<'a>>, semi: Semi<'a> },
+    FuncDecl    { sig: Box<FuncSig<'a>> },
     /// `fn <sig> <body>`
     /// The `body` will be always an `Expr::Block`.
     Func        { sig: Box<FuncSig<'a>>, body: Box<Expr<'a>> },
@@ -54,19 +54,16 @@ pub enum ItemKind<'a> {
     Type        { alias:  Ident<'a>
                 , templ:  Template<'a>
                 , whs:    OptWhere<'a>
-                , origin: Option<Box<Ty<'a>>>
-                , semi:   Semi<'a> },
+                , origin: Option<Box<Ty<'a>>> },
     /// `struct <name> <template> [where_clause];`
     StructUnit  { name:  Ident<'a>
                 , templ: Template<'a>
-                , whs:   OptWhere<'a>
-                , semi:  Semi<'a> },
+                , whs:   OptWhere<'a> },
     /// `struct <name> <template> (<elem1>, ...) [where_clause];`
     StructTuple { name:  Ident<'a>
                 , templ: Template<'a>
                 , elems: Vec<StructTupleElem<'a>>
-                , whs:   OptWhere<'a>
-                , semi:  Semi<'a> },
+                , whs:   OptWhere<'a> },
     /// `struct <name> <template> [where_clause] { <field1>, ... }`
     StructFields{ name:   Ident<'a>
                 , templ:  Template<'a>
@@ -80,13 +77,11 @@ pub enum ItemKind<'a> {
     /// `const <name>: <ty> = <val>;`
     Const       { name: Ident<'a>
                 , ty:   Option<Box<Ty<'a>>>
-                , val:  Option<Box<Expr<'a>>>
-                , semi: Semi<'a> },
+                , val:  Option<Box<Expr<'a>>> },
     /// `static <name>: <ty> = <val>;`
     Static      { name: Ident<'a>
                 , ty:   Option<Box<Ty<'a>>>
-                , val:  Option<Box<Expr<'a>>>
-                , semi: Semi<'a> },
+                , val:  Option<Box<Expr<'a>>> },
     /// `trait <name> <template> [where_clause] { <item1> ... }`
     Trait       { name:  Ident<'a>
                 , templ: Template<'a>
@@ -105,7 +100,6 @@ pub enum ItemKind<'a> {
                 , whs:   OptWhere<'a>
                 , inner: Option<Mod<'a>> },
     PluginInvoke(PluginInvoke<'a>),
-    Unknow      (TT<'a>),
     Null,
 }
 
@@ -114,24 +108,23 @@ pub enum ItemKind<'a> {
 pub enum UseName<'a> {
     Self_ (LocStr<'a>),
     Name  { name: Ident<'a>, alias: Option<Ident<'a>> },
-    Unknow(TT<'a>),
 }
 
 /// An element of a tuple-like struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum StructTupleElem<'a> {
-    Elem  { attrs: Vec<Attr<'a>>, pub_: OptSym<'a>, ty: Ty<'a> },
-    Unknow(TT<'a>),
+pub struct StructTupleElem<'a> {
+    pub attrs: Vec<Attr<'a>>,
+    pub pub_:  OptSym<'a>,
+    pub ty:    Ty<'a>,
 }
 
 /// a field of a normal struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum StructField<'a> {
-    Field { attrs: Vec<Attr<'a>>
-          , pub_:  OptSym<'a>
-          , name:  Ident<'a>
-          , ty:    Option<Ty<'a>> },
-    Unknow(TT<'a>),
+pub struct StructField<'a> {
+    pub attrs: Vec<Attr<'a>>,
+    pub pub_:  OptSym<'a>,
+    pub name:  Ident<'a>,
+    pub ty:    Option<Ty<'a>>,
 }
 
 /// An variant of an `enum`.
@@ -144,7 +137,6 @@ pub enum EnumVar<'a> {
     Struct{ attrs: Vec<Attr<'a>>
           , name: Ident<'a>
           , fields: Vec<StructField<'a>> },
-    Unknow(TT<'a>),
 }
 
 /// A path, like `::std::Option`, `MyEnum::A`, etc.
@@ -166,7 +158,6 @@ pub enum PathComp<'a> {
 pub enum TyHintArg<'a> {
     Lifetime(Lifetime<'a>),
     Ty      (Ty<'a>),
-    Unknow  (TT<'a>),
 }
 
 pub type Template<'a> = Vec<TemplArg<'a>>;
@@ -176,7 +167,6 @@ pub type Template<'a> = Vec<TemplArg<'a>>;
 pub enum TemplArg<'a> {
     Lifetime{ name: Lifetime<'a>, bound: Option<Vec<Lifetime<'a>>> },
     Ty      { name: Ident<'a>, bound: Option<Trait<'a>> },
-    Unknow  (TT<'a>),
 }
 
 pub type Where<'a> = Vec<Restrict<'a>>;
@@ -187,7 +177,6 @@ pub type OptWhere<'a> = Option<Where<'a>>;
 pub enum Restrict<'a> {
     LifeBound  { lt: Lifetime<'a>, bound: Option<Vec<Lifetime<'a>>> },
     TraitBound { ty: Ty<'a>, bound: Option<Trait<'a>> },
-    Unknow     (TT<'a>),
 }
 
 /// The signature of a function, including templates, trait bounds,
@@ -221,7 +210,6 @@ pub enum FuncParam<'a> {
     SelfRef { mut_: OptSym<'a> },
     SelfAs  (Ty<'a>),
     Bind    { pat: Pat<'a>, ty: Option<Box<Ty<'a>>> },
-    Unknow  (TT<'a>),
 }
 
 /// The type of a function.
@@ -235,9 +223,9 @@ pub struct FuncTy<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum FuncTyParam<'a> {
-    Param { name: Option<Ident<'a>>, ty: Ty<'a> },
-    Unknow(TT<'a>),
+pub struct FuncTyParam<'a> {
+    pub name: Option<Ident<'a>>,
+    pub ty:   Ty<'a>,
 }
 
 /// The ABI of a function or an `extern` block.
@@ -274,9 +262,9 @@ pub enum Ty<'a> {
     /// Pointer.
     Ptr    { mut_: OptSym<'a>, ty: Box<Ty<'a>> },
     /// Slice.
-    Slice  { ty: Box<Ty<'a>>, unknow: Vec<TT<'a>> },
+    Slice  (Box<Ty<'a>>),
     /// Array.
-    Array  { ty: Box<Ty<'a>>, size: Box<Expr<'a>>, unknow: Vec<TT<'a>> },
+    Array  { ty: Box<Ty<'a>>, size: Box<Expr<'a>> },
     /// The function pointer type, like `fn(i32, u8) -> usize`.
     Func   (Box<FuncTy<'a>>),
     Unknow (TT<'a>),
@@ -304,7 +292,7 @@ pub enum TyApplyArg<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Attr<'a> {
     Doc { loc: LocStr<'a>, doc: &'a str },
-    Meta{ meta: Meta<'a>, unknow: Vec<TT<'a>> },
+    Meta(Meta<'a>),
 }
 
 /// An meta (the content inside `#[]`).
@@ -326,10 +314,9 @@ pub enum Stmt<'a> {
     Item        (Box<Item<'a>>),
     Let         { pat:  Pat<'a>
                 , ty:   Option<Box<Ty<'a>>>
-                , expr: Option<Box<Expr<'a>>>
-                , semi: Semi<'a> },
-    Expr        { expr: Expr<'a>, semi: Semi<'a> },
-    PluginInvoke{ p: PluginInvoke<'a>, semi: Semi<'a> },
+                , expr: Option<Box<Expr<'a>>> },
+    Expr        (Expr<'a>),
+    PluginInvoke(PluginInvoke<'a>),
     Unknow      (TT<'a>),
 }
 
@@ -355,11 +342,9 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
     TupleField  { obj: Box<Expr<'a>>, ind_loc: LocStr<'a>, index: imax },
     Index       { obj: Box<Expr<'a>>
                 , brk_loc: LocStr<'a>
-                , index: Box<Expr<'a>>
-                , unknow: Vec<TT<'a>> },
+                , index: Box<Expr<'a>> },
     ArrayFill   { elem: Box<Expr<'a>>
-                , len: Box<Expr<'a>>
-                , unknow: Vec<TT<'a>> },
+                , len: Box<Expr<'a>> },
     ArrayLit    (Vec<Expr<'a>>),
     // Range is BinaryOp
     UnaryOp     { op: UnaryOp, op_loc: LocStr<'a>, expr: Box<Expr<'a>> },
@@ -530,7 +515,6 @@ pub enum Literal<'a> {
     Bool     (bool),
 }
 
-pub type Semi<'a> = Result<(), LocStr<'a>>;
 pub type OptSym<'a> = Option<LocStr<'a>>;
 pub type Ident<'a> = Result<LocStr<'a>, LocStr<'a>>;
 pub type Lifetime<'a> = &'a str;
