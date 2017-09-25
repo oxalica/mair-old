@@ -3,6 +3,7 @@ use std::fs::*;
 use std::path::{Path, PathBuf};
 use std::io::{self, Read, Write};
 use std::ffi::OsStr;
+use mair::parse::str_ptr_diff;
 use mair::parse::error::*;
 use mair::parse::lexer::*;
 use mair::parse::parser::*;
@@ -75,7 +76,7 @@ fn tts(input: &str) -> Result<Vec<TT>, UnmatchedDelimError> {
     parse_tts(input, &ltoks)
 }
 
-fn parse(input: &str) -> Mod {
+fn parse(input: &str) -> (Mod, Vec<HardSyntaxError>) {
     let tts_ = tts(input).unwrap();
     parse_crate(input, tts_)
 }
@@ -95,6 +96,16 @@ fn parse_test() {
         writeln!(f, "{:?}", tts(s))
     });
     test_dir("parser_large", |f, s| {
-        writeln!(f, "{:?}", parse(s))
+        let (m, v) = parse(s);
+        writeln!(f, "{:?}", m)?;
+        for HardSyntaxError{ loc, reason } in v {
+            writeln!(f, "{}..{} {:?} {}",
+                str_ptr_diff(loc, s),
+                str_ptr_diff(&loc[loc.len()..], s),
+                loc,
+                reason,
+            )?;
+        }
+        Ok(())
     });
 }
