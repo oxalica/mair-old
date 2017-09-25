@@ -160,9 +160,9 @@ impl<'t, 'e> Parser<'t, 'e> {
         }
     }
 
-    /// Take the rest of TTs.
-    pub fn rest(self) -> Vec<TT<'t>> {
-        self.tts.rest()
+    /// Emit an error in `loc` with `reason`.
+    pub fn err(&mut self, loc: &'t str, reason: &'static str) {
+        self.errs.push(HardSyntaxError{ loc, reason })
     }
 
     /// Return whether there's no TT left.
@@ -170,20 +170,40 @@ impl<'t, 'e> Parser<'t, 'e> {
         self.tts.peek(0).is_none()
     }
 
+    /// Expect the end of TTs. Any TT left will be marked as error.
+    fn expect_end(&mut self) {
+        let mut locs = vec![];
+        for (_, loc) in &mut self.tts {
+            locs.push(loc);
+        }
+        for loc in locs {
+            self.err(loc, "Expect nothing");
+        }
+    }
+
+    /// Eat and return a semicolon.
+    fn expect_semi(&mut self) {
+        match_eat!{ self.tts;
+            sym!(";") => (),
+            _ => {
+                let loc = self.prev_pos();
+                self.err(loc, "Expect a semicolon")
+            },
+        }
+    }
+
     /// Eat `(<p> <sep>)* (<last> | <p>)? <is_end>` and return (`p`s, the
     /// optional `last`, whether there's a tailing `sep`).
-    /// Unknow TTs between `p`, `sep`, `last` and `is_end` will be pushed into
-    /// the result through `err`.
-    fn eat_many_tail_last<T, U, F, G, H, P>(
-        &mut self,
-        sep: SymbolType,
-        is_end: F,
-        err: G,
-        last: H,
-        p: P,
+    /// Unknow TTs between `p`, `sep`, `last` and `is_end` will be marked as
+    /// error.
+    fn eat_many_tail_last<T, U, F, H, P>(
+        &mut        self,
+        sep:        SymbolType,
+        is_end:     F,
+        last:       H,
+        p:          P,
     ) -> (Vec<T>, Option<U>, bool)
     where F: Fn(&mut Self) -> bool,
-          G: Fn(TT<'t>) -> T,
           H: Fn(&mut Self) -> Option<U>,
           P: Fn(&mut Self) -> T {
         let mut v = vec![];
@@ -196,7 +216,8 @@ impl<'t, 'e> Parser<'t, 'e> {
                 Some(u) => {
                     while !is_end(self) { // consume all after `last`
                         match_eat!{ self.tts;
-                            tt => v.push(err(tt)),
+                            tok!(_, loc) =>
+                                self.err(loc, "Expect the closing"),
                             _ => unreachable!(), // not `is_end`
                         }
                     }
@@ -210,12 +231,10 @@ impl<'t, 'e> Parser<'t, 'e> {
                                 tail = true;
                                 continue 'outer;
                             } else {
-                                v.push(err((
-                                    TTKind::Token(Tokk::Symbol(s)),
-                                    loc,
-                                )));
+                                self.err(loc, "Expect a separator");
                             },
-                            tt => v.push(err(tt)),
+                            tok!(_, loc) =>
+                                self.err(loc, "Expect a separator"),
                             _ => unreachable!(), // not `is_end`
                         }
                     }
@@ -226,15 +245,13 @@ impl<'t, 'e> Parser<'t, 'e> {
     }
 
     /// Eat `<p> (<sep> <p>)*` until `is_end` and return `p`s.
-    fn eat_many_sep<T, F, G, P>(
+    fn eat_many_sep<T, F, P>(
         &mut self,
         sep: SymbolType,
         is_end: F,
-        err: G,
         p: P,
     ) -> Vec<T>
     where F: Fn(&mut Self) -> bool,
-          G: Fn(TT<'t>) -> T,
           P: Fn(&mut Self) -> T {
         let mut v = vec![];
         'outer: loop {
@@ -244,12 +261,9 @@ impl<'t, 'e> Parser<'t, 'e> {
                     tok!(Tokk::Symbol(s), loc) => if s == sep {
                         continue 'outer;
                     } else {
-                        v.push(err((
-                            TTKind::Token(Tokk::Symbol(s)),
-                            loc,
-                        )));
+                        self.err(loc, "Expect a separator");
                     },
-                    tt => v.push(err(tt)),
+                    tok!(_, loc) => self.err(loc, "Expect a separator"),
                     _ => unreachable!(), // not `is_end`
                 }
             }
@@ -259,32 +273,28 @@ impl<'t, 'e> Parser<'t, 'e> {
 
     /// Eat many `p`s seperated by `sep` until `is_end`. Return `p`s and
     /// whether it consumes tailing `sep`.
-    fn eat_many_tail<T, F, G, P>(
+    fn eat_many_tail<T, F, P>(
         &mut self,
         sep: SymbolType,
         is_end: F,
-        err: G,
         p: P,
     ) -> (Vec<T>, bool)
     where F: Fn(&mut Self) -> bool,
-          G: Fn(TT<'t>) -> T,
           P: Fn(&mut Self) -> T {
         enum Void {}
         let (v, _, tail): (_, Option<Void>, _) =
-            self.eat_many_tail_last(sep, is_end, err, |_| None, p);
+            self.eat_many_tail_last(sep, is_end, |_| None, p);
         (v, tail)
     }
 
     /// Eat many `p`s seperated by `,` until the end. Return `p`s and whether
     /// it consumes tailing `,`.
-    fn eat_many_comma_tail_end<T, G, P>(
+    fn eat_many_comma_tail_end<T, P>(
         mut self,
-        err: G,
         p: P,
     ) -> (Vec<T>, bool)
-    where G: Fn(TT<'t>) -> T,
-          P: Fn(&mut Self) -> T {
-        self.eat_many_tail(symbol_type!(","), |p| p.is_end(), err, p)
+    where P: Fn(&mut Self) -> T {
+        self.eat_many_tail(symbol_type!(","), |p| p.is_end(), p)
     }
 
     /// Return whether the next TT can be the start of an item.
@@ -359,7 +369,9 @@ impl<'t, 'e> Parser<'t, 'e> {
         let inner_attrs = self.eat_inner_attrs();
         let mut items = vec![];
         while !self.is_end() {
-            items.push(self.eat_item());
+            if let Some(item) = self.eat_item() {
+                items.push(item);
+            }
         }
         Mod{ inner_attrs, items }
     }
@@ -410,7 +422,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                         let (v, _) = self.eat_many_tail(
                             symbol_type!(","),
                             Parser::try_eat_templ_end,
-                            TyHintArg::Unknow,
                             |p| match_eat!{ p.tts;
                                 lt!(lt) => TyHintArg::Lifetime(lt),
                                 _ => TyHintArg::Ty(p.eat_ty(true)),
@@ -425,15 +436,6 @@ impl<'t, 'e> Parser<'t, 'e> {
         }
     }
 
-    /// Eat and return a semicolon.
-    fn eat_semi(&mut self) -> Semi<'t> {
-        match_eat!{ self.tts;
-            sym!(";") => Ok(()),
-            _ => Err(self.prev_pos()),
-        }
-    }
-
-
     /// Eat inner attributes as more as possible.
     fn eat_inner_attrs(&mut self) -> Vec<Attr<'t>> {
         let mut v = vec![];
@@ -444,7 +446,8 @@ impl<'t, 'e> Parser<'t, 'e> {
                 sym!("#"), sym!("!"), tree!(loc, delim: Bracket, tts) => {
                     let mut p = self.new_inner(loc, tts);
                     let meta = p.eat_meta();
-                    v.push(Attr::Meta{ meta, unknow: p.rest() })
+                    p.expect_end();
+                    v.push(Attr::Meta(meta))
                 },
                 _ => return v,
             }
@@ -461,7 +464,8 @@ impl<'t, 'e> Parser<'t, 'e> {
                 sym!("#"), tree!(loc, delim: Bracket, tts) => {
                     let mut p = self.new_inner(loc, tts);
                     let meta = p.eat_meta();
-                    v.push(Attr::Meta{ meta, unknow: p.rest() })
+                    p.expect_end();
+                    v.push(Attr::Meta(meta))
                 },
                 _ => return v,
             }
@@ -477,7 +481,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Paren, tts) => {
                 let (subs, _) = self.new_inner(loc, tts)
                                     .eat_many_comma_tail_end(
-                    Meta::Unknow,
                     |p| p.eat_meta(),
                 );
                 Meta::Sub{ name, subs }
@@ -488,20 +491,22 @@ impl<'t, 'e> Parser<'t, 'e> {
 
     /// Eat an item. It will consume at lease one TT.
     /// Warning: There must be at least one TT left.
-    fn eat_item(&mut self) -> Item<'t> {
+    fn eat_item(&mut self) -> Option<Item<'t>> {
         let outer_attrs = self.eat_outer_attrs();
         let pub_ = eatKw!(self.tts; "pub");
         let opt_detail = self.eat_opt_item_detail();
         let detail = match opt_detail {
             Some(x) => x,
-            None if outer_attrs.is_empty() && pub_.is_none() =>
-                match_eat!{ self.tts;         // havn't consumed `pub`
-                    tt => ItemKind::Unknow(tt),
-                    _ => unreachable!(), // consumes nothing and nothing left
-                },
+            None if outer_attrs.is_empty() && pub_.is_none() => {
+                // havn't consumed `pub`
+                // "consumes nothing and nothing left" is impossible.
+                let (_, loc) = self.tts.next().unwrap(); // here <-/
+                self.err(loc, "Unknow beginning of item");
+                return None
+            },
             None => ItemKind::Null,
         };
-        Item{ outer_attrs, pub_, detail }
+        Some(Item{ outer_attrs, pub_, detail })
     }
 
     /// Eat and return the detail of an item, or return None.
@@ -540,8 +545,8 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Eat the tail after `extern crate`.
     fn eat_extern_crate_tail(&mut self) -> ItemKind<'t> {
         let name = self.eat_ident();
-        let semi = self.eat_semi();
-        ItemKind::ExternCrate{ name, semi }
+        self.expect_semi();
+        ItemKind::ExternCrate{ name }
     }
 
     /// Eat the tail after `use`.
@@ -573,22 +578,21 @@ impl<'t, 'e> Parser<'t, 'e> {
     fn eat_use_names_tail(&mut self, path: Path<'t>) -> ItemKind<'t> {
         match_eat!{ self.tts;
             sym!("*") => {
-                let semi = self.eat_semi();
-                ItemKind::UseAll{ path, semi }
+                self.expect_semi();
+                ItemKind::UseAll{ path }
             },
             tree!(loc, delim: Brace, tts) => {
                 let (names, _) = self.new_inner(loc, tts)
                                      .eat_many_comma_tail_end(
-                    UseName::Unknow,
                     Parser::eat_use_name,
                 );
-                let semi = self.eat_semi();
-                ItemKind::UseSome{ path, names, semi }
+                self.expect_semi();
+                ItemKind::UseSome{ path, names }
             },
             _ => {
                 let name = self.eat_use_name();
-                let semi = self.eat_semi();
-                ItemKind::UseOne{ path, name, semi }
+                self.expect_semi();
+                ItemKind::UseOne{ path, name }
             },
         }
     }
@@ -614,8 +618,8 @@ impl<'t, 'e> Parser<'t, 'e> {
         if let Some(inner) = self.eat_opt_brace_mod() {
             ItemKind::Mod{ name, inner }
         } else {
-            let semi = self.eat_semi();
-            ItemKind::ExternMod{ name, semi }
+            self.expect_semi();
+            ItemKind::ExternMod{ name }
         }
     }
 
@@ -629,8 +633,8 @@ impl<'t, 'e> Parser<'t, 'e> {
         if let Some(body) = self.eat_opt_block_expr() {
             ItemKind::Func{ sig, body: Box::new(body) }
         } else {
-            let semi = self.eat_semi();
-            ItemKind::FuncDecl{ sig, semi }
+            self.expect_semi();
+            ItemKind::FuncDecl{ sig }
         }
     }
 
@@ -648,7 +652,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                                         .eat_many_tail_last(
                     symbol_type!(","),
                     |p| p.is_end(),
-                    FuncParam::Unknow,
                     |p| match_eat!{ p.tts;
                         sym!("...", loc) => Some(loc),
                         _ => None,
@@ -715,8 +718,8 @@ impl<'t, 'e> Parser<'t, 'e> {
             sym!("=") => Some(Box::new(self.eat_ty(true))),
             _ => None,
         };
-        let semi = self.eat_semi();
-        ItemKind::Type{ alias, templ, whs, origin, semi }
+        self.expect_semi();
+        ItemKind::Type{ alias, templ, whs, origin }
     }
 
     /// Eat the tail after `struct`.
@@ -727,12 +730,11 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Paren, tts) => {
                 let (elems, _) = self.new_inner(loc, tts)
                                      .eat_many_comma_tail_end(
-                    StructTupleElem::Unknow,
                     Parser::eat_struct_tuple_elem,
                 );
                 let whs = self.eat_opt_whs();
-                let semi = self.eat_semi();
-                ItemKind::StructTuple{ name, templ, elems, whs, semi }
+                self.expect_semi();
+                ItemKind::StructTuple{ name, templ, elems, whs }
             },
             _ => {
                 let whs = self.eat_opt_whs();
@@ -740,7 +742,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                     tree!(loc, delim: Brace, tts) => {
                         let (v, _) = self.new_inner(loc, tts)
                                          .eat_many_comma_tail_end(
-                            StructField::Unknow,
                             Parser::eat_struct_field,
                         );
                         Some(v)
@@ -750,8 +751,8 @@ impl<'t, 'e> Parser<'t, 'e> {
                 if let Some(fields) = opt_fields {
                     ItemKind::StructFields{ name, templ, whs, fields }
                 } else {
-                    let semi = self.eat_semi();
-                    ItemKind::StructUnit{ name, templ, whs, semi }
+                    self.expect_semi();
+                    ItemKind::StructUnit{ name, templ, whs }
                 }
             },
         }
@@ -765,7 +766,7 @@ impl<'t, 'e> Parser<'t, 'e> {
             _ => None,
         };
         let ty = self.eat_ty(true);
-        StructTupleElem::Elem{ attrs, pub_, ty }
+        StructTupleElem{ attrs, pub_, ty }
     }
 
     /// Eat and return a field of struct with fields.
@@ -777,7 +778,7 @@ impl<'t, 'e> Parser<'t, 'e> {
             sym!(":") => Some(self.eat_ty(true)),
             _ => None,
         };
-        StructField::Field{ attrs, pub_, name, ty }
+        StructField{ attrs, pub_, name, ty }
     }
 
     /// Eat the tail after `enum`.
@@ -789,7 +790,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Brace, tts) => {
                 let (v, _) = self.new_inner(loc, tts)
                                  .eat_many_comma_tail_end(
-                    EnumVar::Unknow,
                     Parser::eat_enum_var,
                 );
                 Some(v)
@@ -807,7 +807,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Paren, tts) => {
                 let (elems, _) = self.new_inner(loc, tts)
                                      .eat_many_comma_tail_end(
-                    StructTupleElem::Unknow,
                     Parser::eat_struct_tuple_elem,
                 );
                 EnumVar::Tuple{ attrs, name, elems }
@@ -815,7 +814,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Brace, tts) => {
                 let (fields, _) = self.new_inner(loc, tts)
                                       .eat_many_comma_tail_end(
-                    StructField::Unknow,
                     Parser::eat_struct_field,
                 );
                 EnumVar::Struct{ attrs, name, fields }
@@ -835,11 +833,11 @@ impl<'t, 'e> Parser<'t, 'e> {
             sym!("=") => Some(Box::new(self.eat_expr(false, true))),
             _ => None,
         };
-        let semi = self.eat_semi();
+        self.expect_semi();
         if is_static {
-            ItemKind::Static{ name, ty, val, semi }
+            ItemKind::Static{ name, ty, val }
         } else {
-            ItemKind::Const{ name, ty, val, semi }
+            ItemKind::Const{ name, ty, val }
         }
     }
 
@@ -901,7 +899,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                 let (v, _) = self.eat_many_tail(
                     symbol_type!(","),
                     |p| p.try_eat_templ_end(),
-                    TemplArg::Unknow,
                     Parser::eat_templ_arg,
                 );
                 v
@@ -940,11 +937,10 @@ impl<'t, 'e> Parser<'t, 'e> {
                 Some(&sym!("+")) => false,
                 _ => true,
             },
-            |_| unreachable!(),  // if the next TT is not a lifetime, `end`
-            |p| match_eat!{ p.tts; // will return true to stop eating.
+            |p| match_eat!{ p.tts;
                 lt!(x) => x,
-                _ => unreachable!(), //
-            },
+                _ => unreachable!(), // if the next TT is not a lifetime, `end`
+            },                       // will return true to stop eating.
         ).0
     }
 
@@ -960,7 +956,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                         Some(&sym!(";")) => true,
                         _ => false,
                     },
-                    Restrict::Unknow,
                     Parser::eat_restrict,
                 );
                 Some(restricts)
@@ -1006,7 +1001,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Paren, tts) => {
                 let (mut v, tail) = self.new_inner(loc, tts)
                                         .eat_many_comma_tail_end(
-                    Pat::Unknow,
                     Parser::eat_pat,
                 );
                 if v.len() == 1 && !tail {
@@ -1039,7 +1033,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Paren, tts) => {
                 let (v, _) = self.new_inner(loc, tts)
                                  .eat_many_comma_tail_end(
-                    Pat::Unknow,
                     Parser::eat_pat,
                 );
                 Pat::DestructTuple{ name, elems: v }
@@ -1052,7 +1045,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                 if ellipsis { tts.pop(); }
                 let (v, _) = self.new_inner(loc, tts)
                                  .eat_many_comma_tail_end(
-                    DestructField::Unknow,
                     Parser::eat_destruct_field,
                 );
                 Pat::DestructNormal{ name, fields: v, ellipsis }
@@ -1090,7 +1082,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Paren, tts) => {
                 let (mut v, tail) = self.new_inner(loc, tts)
                                         .eat_many_comma_tail_end(
-                    Ty::Unknow,
                     |p| p.eat_ty(true),
                 );
                 if v.len() == 1 && !tail {
@@ -1105,9 +1096,13 @@ impl<'t, 'e> Parser<'t, 'e> {
                 match_eat!{ p.tts;
                     sym!(";") => {
                         let size = Box::new(p.eat_expr(false, true));
-                        Ty::Array{ ty, size, unknow: p.rest() }
+                        p.expect_end();
+                        Ty::Array{ ty, size }
                     },
-                    _ => Ty::Slice{ ty, unknow: p.rest() },
+                    _ => {
+                        p.expect_end();
+                        Ty::Slice(ty)
+                    },
                 }
             },
             sym!("&") => {
@@ -1142,7 +1137,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                         Some(&sym!("+")) => false,
                         _ => !p.is_ty_apply_begin()
                     },
-                    TyApply::Unknow,
                     Parser::eat_ty_apply,
                 );
                 if v.len() == 1 && !tail {
@@ -1176,7 +1170,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                 let (args, _) = self.eat_many_tail(
                     symbol_type!(","),
                     |p| p.try_eat_templ_end(),
-                    TyApplyArg::Unknow,
                     Parser::eat_ty_apply_arg,
                 );
                 Some(args)
@@ -1192,7 +1185,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Paren, tts) => {
                 let (args, _) = self.new_inner(loc, tts)
                                     .eat_many_comma_tail_end(
-                    Ty::Unknow,
                     |p| p.eat_ty(true),
                 );
                 let ret_ty = self.eat_opt_ret_ty();
@@ -1230,17 +1222,16 @@ impl<'t, 'e> Parser<'t, 'e> {
                                         .eat_many_tail_last(
                     symbol_type!(","),
                     |p| p.is_end(),
-                    FuncTyParam::Unknow,
                     |p| match_eat!{ p.tts;
                         sym!("...", loc) => Some(loc),
                         _ => None,
                     },
                     |p| match_eat!{ p.tts;
                         ident!(name), sym!(":") =>
-                            FuncTyParam::Param{ name: Some(Ok(name))
-                                              , ty: p.eat_ty(true) },
-                        _ => FuncTyParam::Param{ name: None
-                                               , ty: p.eat_ty(true) },
+                            FuncTyParam{ name: Some(Ok(name))
+                                       , ty: p.eat_ty(true) },
+                        _ => FuncTyParam{ name: None
+                                        , ty: p.eat_ty(true) },
                     },
                 );
                 (Some(args), va)
@@ -1444,7 +1435,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                         tree!(loc, delim: Paren, tts) => {
                             let (args, _) = self.new_inner(loc, tts)
                                                 .eat_many_comma_tail_end(
-                                Expr::Unknow,
                                 |p| p.eat_expr(false, true),
                             );
                             e = Expr::MemberCall{
@@ -1464,19 +1454,17 @@ impl<'t, 'e> Parser<'t, 'e> {
                     let mut p = self.new_inner(loc, tts);
                     let brk_loc = &loc[..1]; // `[`
                     let index = Box::new(p.eat_expr(false, true));
-                    let unknow = p.rest();
-                    e = Expr::Index{
+                    p.expect_end();
+                    e = Expr::Index {
                         obj: Box::new(e),
                         brk_loc,
                         index,
-                        unknow,
                     };
                 },
                 tree!(loc, delim: Paren, tts) => {
                     let par_loc = &loc[..1]; // `(`
                     let (args, _) = self.new_inner(loc, tts)
                                         .eat_many_comma_tail_end(
-                        Expr::Unknow,
                         |p| p.eat_expr(false, true),
                     );
                     e = Expr::Call{ func: Box::new(e), par_loc, args };
@@ -1513,7 +1501,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Paren, tts) => {
                 let (mut v, tail) = self.new_inner(loc, tts)
                                         .eat_many_comma_tail_end(
-                    Expr::Unknow,
                     |p| p.eat_expr(false, true),
                 );
                 if v.len() == 1 && !tail {
@@ -1658,7 +1645,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             tree!(loc, delim: Brace, tts) => {
                 let (arms, _) = self.new_inner(loc, tts)
                                     .eat_many_comma_tail_end(
-                    MatchArm::Unknow,
                     |p| {
                         let pats = p.eat_many_sep(
                             symbol_type!("|"),
@@ -1666,7 +1652,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                                 Some(&sym!("|")) => false,
                                 _ => !p.is_pat_begin(),
                             },
-                            Pat::Unknow,
                             Parser::eat_pat,
                         );
                         let cond = match_eat!{ p.tts;
@@ -1691,26 +1676,30 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Eat the inner of a block expression to the end, and return the block
     /// expression.
     fn eat_block_expr_inner_end(mut self) -> Expr<'t> {
+        let eat_semi = |p: &mut Self| match_eat!{ p.tts;
+            sym!(";") => true,
+            _ => false,
+        };
         let inner_attrs = self.eat_inner_attrs();
         let mut stmts = vec![];
         let mut ret: Option<Expr> = None;
         while !self.is_end() {
             if let Some(expr) = ret.take() { // .. <expr> |;
-                let semi = if expr.is_item_like() {
-                    Ok(()) // don't need `;`
-                } else {
-                    self.eat_semi()
-                };
+                if !expr.is_item_like() {
+                    self.expect_semi();
+                }
                 let stmt = match expr {
                     Expr::PluginInvoke(p) =>
-                        Stmt::PluginInvoke{ p, semi },
-                    _ => Stmt::Expr{ expr, semi },
+                        Stmt::PluginInvoke(p),
+                    _ => Stmt::Expr(expr),
                 };
                 stmts.push(stmt);
-            } else if self.eat_semi().is_ok() { // .. <expr>; |;
+            } else if eat_semi(&mut self) { // .. <expr>; |;
                 // NOP
             } else if self.is_item_begin() {
-                stmts.push(Stmt::Item(Box::new(self.eat_item())));
+                if let Some(item) = self.eat_item() {
+                    stmts.push(Stmt::Item(Box::new(item)));
+                }
             } else { match_eat!{ self.tts;
                 kw!("let") => {
                     let pat = self.eat_pat();
@@ -1723,16 +1712,14 @@ impl<'t, 'e> Parser<'t, 'e> {
                             Some(Box::new(self.eat_expr(false, true))),
                         _ => None,
                     };
-                    let semi = self.eat_semi();
-                    stmts.push(Stmt::Let{ pat, ty, expr, semi });
+                    self.expect_semi();
+                    stmts.push(Stmt::Let{ pat, ty, expr });
                 },
                 _ => if self.is_expr_begin() {
                     ret = Some(self.eat_expr(true, true));
                 } else {
-                    match_eat!{ self.tts;
-                        tt => stmts.push(Stmt::Unknow(tt)),
-                        _ => unreachable!(), // not `is_end()`
-                    }
+                    let (_, loc) = self.tts.next().unwrap(); // not `is_end()`
+                    self.err(loc, "Unknow beginning of statement");
                 },
             }}
         }
@@ -1747,7 +1734,8 @@ impl<'t, 'e> Parser<'t, 'e> {
             sym!(";") => {
                 let elem = Box::new(e0);
                 let len = Box::new(self.eat_expr(false, true));
-                Expr::ArrayFill{ elem, len, unknow: self.rest() }
+                self.expect_end();
+                Expr::ArrayFill{ elem, len }
             },
             _ => {
                 match_eat!{ self.tts;
@@ -1755,7 +1743,6 @@ impl<'t, 'e> Parser<'t, 'e> {
                     _ => (),
                 };
                 let (mut elems, _) = self.eat_many_comma_tail_end(
-                    Expr::Unknow,
                     |p| p.eat_expr(false, true),
                 );
                 elems.insert(0, e0);
@@ -1788,7 +1775,6 @@ impl<'t, 'e> Parser<'t, 'e> {
             self.eat_many_tail(
                 symbol_type!(","),
                 Parser::try_eat_lambda_arg_end,
-                FuncParam::Unknow,
                 Parser::eat_lambda_param,
             ).0
         };
@@ -1824,7 +1810,6 @@ impl<'t, 'e> Parser<'t, 'e> {
         let (v, base, _) = self.eat_many_tail_last(
             symbol_type!(","),
             |p| p.is_end(),
-            ExprStructField::Unknow,
             |p| match_eat!{ p.tts;
                 sym!("..") => Some(Box::new(p.eat_expr(false, true))),
                 _ => None,

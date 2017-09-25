@@ -15,11 +15,6 @@ impl<'a> TTStream<'a> {
         self.1
     }
 
-    pub fn rest(mut self) -> Vec<TT<'a>> {
-        self.0.reverse();
-        self.0
-    }
-
     pub fn peek(&self, index: usize) -> Option<&TT<'a>> {
         let len = self.0.len();
         if index < len {
