@@ -192,109 +192,100 @@ impl<'t, 'e> Parser<'t, 'e> {
         }
     }
 
-    /// Eat `(<p> <sep>)* (<last> | <p>)? <is_end>` and return (`p`s, the
-    /// optional `last`, whether there's a tailing `sep`).
-    /// Unknow TTs between `p`, `sep`, `last` and `is_end` will be marked as
-    /// error.
-    fn eat_many_tail_last<T, U, F, H, P>(
-        &mut        self,
-        sep:        SymbolType,
-        is_end:     F,
-        last:       H,
-        p:          P,
-    ) -> (Vec<T>, Option<U>, bool)
-    where F: Fn(&mut Self) -> bool,
-          H: Fn(&mut Self) -> Option<U>,
-          P: Fn(&mut Self) -> T {
-        let mut v = vec![];
-        let mut tail = false;
-        'outer: loop {
-            if is_end(self) {
-                return (v, None, tail);
-            }
-            match last(self) {
-                Some(u) => {
-                    while !is_end(self) { // consume all after `last`
-                        match_eat!{ self.tts;
-                            tok!(_, loc) =>
-                                self.err(loc, "Expect the closing"),
-                            _ => unreachable!(), // not `is_end`
-                        }
-                    }
-                    return (v, Some(u), false);
-                },
-                None => {
-                    v.push(p(self));
-                    while !is_end(self) { // expect `sep`
-                        match_eat!{ self.tts;
-                            tok!(Tokk::Symbol(s), loc) => if s == sep {
-                                tail = true;
-                                continue 'outer;
-                            } else {
-                                self.err(loc, "Expect a separator");
-                            },
-                            tok!(_, loc) =>
-                                self.err(loc, "Expect a separator"),
-                            _ => unreachable!(), // not `is_end`
-                        }
-                    }
-                    return (v, None, false); // here `is_end`
-                },
-            }
-        }
-    }
-
-    /// Eat `<p> (<sep> <p>)*` until `is_end` and return `p`s.
-    fn eat_many_sep<T, F, P>(
+    /// Eat `(<elem> <sep>)* <elem>? <end>`, return (`elem`s, whether the TT
+    /// before `end` is `sep`).
+    fn eat_many_sep_tail<T, F, G>(
         &mut self,
-        sep: SymbolType,
-        is_end: F,
-        p: P,
-    ) -> Vec<T>
-    where F: Fn(&mut Self) -> bool,
-          P: Fn(&mut Self) -> T {
+        sep:  SymbolType,
+        elem: F,
+        end:  G,
+    ) -> (Vec<T>, bool)
+    where F: Fn(&mut Self) -> T,
+          G: Fn(&mut Self) -> bool {
         let mut v = vec![];
-        'outer: loop {
-            v.push(p(self));
-            while !is_end(self) {
-                match_eat!{ self.tts;
-                    tok!(Tokk::Symbol(s), loc) => if s == sep {
-                        continue 'outer;
-                    } else {
-                        self.err(loc, "Expect a separator");
-                    },
-                    tok!(_, loc) => self.err(loc, "Expect a separator"),
-                    _ => unreachable!(), // not `is_end`
+        'elem: while !end(self) {
+            v.push(elem(self));
+            while !end(self) {
+                let is_sep = match self.tts.peek(0) {
+                    Some(&tok!(Tokk::Symbol(s))) if s == sep => true,
+                    _ => false,
+                };
+                if is_sep {
+                    self.tts.next().unwrap(); // is `sep`
+                    continue 'elem;
+                } else {
+                    match_eat!{ self.tts;
+                        tok!(_, loc) => self.err(loc, "Expect a separator"),
+                        _ => unreachable!(), // not `end()`
+                    }
                 }
             }
-            return v; // here `is_end`
+            return (v, false); // `end` without eating `sep`
         }
+        (v, true)
     }
 
-    /// Eat many `p`s seperated by `sep` until `is_end`. Return `p`s and
-    /// whether it consumes tailing `sep`.
-    fn eat_many_tail<T, F, P>(
+    /// Eat `(<elem> `,`)* (<elem> | <last>)? <end>`, return (`elem`s, the
+    /// optional `last`).
+    fn eat_many_comma_tail_last<T, U, F, G, H>(
         &mut self,
-        sep: SymbolType,
-        is_end: F,
-        p: P,
-    ) -> (Vec<T>, bool)
-    where F: Fn(&mut Self) -> bool,
-          P: Fn(&mut Self) -> T {
-        enum Void {}
-        let (v, _, tail): (_, Option<Void>, _) =
-            self.eat_many_tail_last(sep, is_end, |_| None, p);
-        (v, tail)
+        elem: F,
+        last: G,
+        end:  H,
+    ) -> (Vec<T>, Option<U>)
+    where F: Fn(&mut Self) -> T,
+          G: Fn(&mut Self) -> Option<U>,
+          H: Fn(&mut Self) -> bool {
+        let mut v = vec![];
+        'elem: while !end(self) {
+            if let Some(x) = last(self) {
+                return (v, Some(x));
+            }
+            v.push(elem(self));
+            while !end(self) { // until eating a `,` or reach the `end`
+                match_eat!{ self.tts;
+                    sym!(",") => continue 'elem,
+                    tok!(_, loc) => self.err(loc, "Expect `,`"),
+                    _ => unreachable!(), // not `end`
+                }
+            }
+            break; // `end` without `,`
+        }
+        (v, None)
     }
 
-    /// Eat many `p`s seperated by `,` until the end. Return `p`s and whether
-    /// it consumes tailing `,`.
-    fn eat_many_comma_tail_end<T, P>(
+    /// Eat `(<elem> `,`)* <elem>`, return `elem`s.
+    fn eat_many_sep<T, F, G>(
+        &mut self,
+        sep:     SymbolType,
+        no_elem: &'static str,
+        elem:    F,
+        end:     G,
+    ) -> Vec<T>
+    where F: Fn(&mut Self) -> T,
+          G: Fn(&mut Self) -> bool {
+        let (v, tail) = self.eat_many_sep_tail(sep, elem, end);
+        if tail {
+            let loc = self.prev_pos();
+            self.err(loc, no_elem);
+        }
+        v
+    }
+
+    /// Eat `(<elem> `,`)* <elem>? <EOF>`, return (`elem`s, whether the last
+    /// TT is `,`)
+    fn eat_many_comma_tail_end<T, F>(
         mut self,
-        p: P,
+        elem: F,
     ) -> (Vec<T>, bool)
-    where P: Fn(&mut Self) -> T {
-        self.eat_many_tail(symbol_type!(","), |p| p.is_end(), p)
+    where F: Fn(&mut Self) -> T {
+        let (v, tail) = self.eat_many_sep_tail(
+            symbol_type!(","),
+            elem,
+            |p| p.is_end(),
+        );
+        self.expect_end();
+        (v, tail)
     }
 
     /// Return whether the next TT can be the start of an item.
@@ -419,13 +410,13 @@ impl<'t, 'e> Parser<'t, 'e> {
                 let name = self.eat_ident();
                 let hint = match_eat!{ self.tts;
                     sym!("::"), sym!("<") => {
-                        let (v, _) = self.eat_many_tail(
+                        let (v, _) = self.eat_many_sep_tail(
                             symbol_type!(","),
-                            Parser::try_eat_templ_end,
                             |p| match_eat!{ p.tts;
                                 lt!(lt) => TyHintArg::Lifetime(lt),
                                 _ => TyHintArg::Ty(p.eat_ty(true)),
                             },
+                            Parser::try_eat_templ_end,
                         );
                         Some(v)
                     },
@@ -648,15 +639,14 @@ impl<'t, 'e> Parser<'t, 'e> {
         let templ = self.eat_templ();
         let (args, va) = match_eat!{ self.tts;
             tree!(loc, delim: Paren, tts) => {
-                let (args, va, _) = self.new_inner(loc, tts)
-                                        .eat_many_tail_last(
-                    symbol_type!(","),
-                    |p| p.is_end(),
+                let (args, va) = self.new_inner(loc, tts)
+                                     .eat_many_comma_tail_last(
+                    Parser::eat_func_param,
                     |p| match_eat!{ p.tts;
                         sym!("...", loc) => Some(loc),
                         _ => None,
                     },
-                    Parser::eat_func_param,
+                    |p| p.is_end(),
                 );
                 (Some(args), va)
             },
@@ -896,10 +886,10 @@ impl<'t, 'e> Parser<'t, 'e> {
     fn eat_templ(&mut self) -> Template<'t> {
         match_eat!{ self.tts;
             sym!("<") => {
-                let (v, _) = self.eat_many_tail(
+                let (v, _) = self.eat_many_sep_tail(
                     symbol_type!(","),
-                    |p| p.try_eat_templ_end(),
                     Parser::eat_templ_arg,
+                    |p| p.try_eat_templ_end(),
                 );
                 v
             },
@@ -930,33 +920,34 @@ impl<'t, 'e> Parser<'t, 'e> {
 
     /// Eat and return `'lt1 + 'lt2 + ...`.
     fn eat_lifetime_bound(&mut self) -> Vec<Lifetime<'t>> {
-        self.eat_many_tail(
+        let (v, _) = self.eat_many_sep_tail(
             symbol_type!("+"),
+            |p| match_eat!{ p.tts;
+                lt!(x) => x,
+                _ => unreachable!(), // if the next TT is not a lifetime, `end`
+            },                       // will return true to stop eating.
             |p| match p.tts.peek(0) {
                 Some(&lt!(_)) |
                 Some(&sym!("+")) => false,
                 _ => true,
             },
-            |p| match_eat!{ p.tts;
-                lt!(x) => x,
-                _ => unreachable!(), // if the next TT is not a lifetime, `end`
-            },                       // will return true to stop eating.
-        ).0
+        );
+        v
     }
 
     /// Eat and return `where` clause, or return None.
     fn eat_opt_whs(&mut self) -> OptWhere<'t> {
         match_eat!{ self.tts;
             kw!("where") => {
-                let (restricts, _) = self.eat_many_tail(
+                let (restricts, _) = self.eat_many_sep_tail(
                     symbol_type!(","),
+                    Parser::eat_restrict,
                     |p| match p.tts.peek(0) {
                         Some(&tree!(_, delim: Brace, ..)) |
                         Some(&sym!("->")) |
                         Some(&sym!(";")) => true,
                         _ => false,
                     },
-                    Parser::eat_restrict,
                 );
                 Some(restricts)
             },
@@ -1131,13 +1122,13 @@ impl<'t, 'e> Parser<'t, 'e> {
             kw!("unsafe", lu), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
                 self.eat_func_ty(Some(lu), ABI::Specific{ loc, abi }),
             _ => if accept_traits {
-                let (mut v, tail) = self.eat_many_tail(
+                let (mut v, tail) = self.eat_many_sep_tail(
                     symbol_type!("+"),
+                    Parser::eat_ty_apply,
                     |p| match p.tts.peek(0) {
                         Some(&sym!("+")) => false,
                         _ => !p.is_ty_apply_begin()
                     },
-                    Parser::eat_ty_apply,
                 );
                 if v.len() == 1 && !tail {
                     Ty::Apply(Box::new(v.pop().unwrap()))
@@ -1167,10 +1158,10 @@ impl<'t, 'e> Parser<'t, 'e> {
     fn eat_opt_angle_ty_apply_args(&mut self) -> Option<Vec<TyApplyArg<'t>>> {
         match_eat!{ self.tts;
             sym!("<") => {
-                let (args, _) = self.eat_many_tail(
+                let (args, _) = self.eat_many_sep_tail(
                     symbol_type!(","),
-                    |p| p.try_eat_templ_end(),
                     Parser::eat_ty_apply_arg,
+                    |p| p.try_eat_templ_end(),
                 );
                 Some(args)
             },
@@ -1218,14 +1209,8 @@ impl<'t, 'e> Parser<'t, 'e> {
     fn eat_func_ty(&mut self, unsafe_: OptSym<'t>, abi: ABI<'t>) -> Ty<'t> {
         let (args, va) = match_eat!{ self.tts;
             tree!(loc, delim: Paren, tts) => {
-                let (args, va, _) = self.new_inner(loc, tts)
-                                        .eat_many_tail_last(
-                    symbol_type!(","),
-                    |p| p.is_end(),
-                    |p| match_eat!{ p.tts;
-                        sym!("...", loc) => Some(loc),
-                        _ => None,
-                    },
+                let (args, va) = self.new_inner(loc, tts)
+                                     .eat_many_comma_tail_last(
                     |p| match_eat!{ p.tts;
                         ident!(name), sym!(":") =>
                             FuncTyParam{ name: Some(Ok(name))
@@ -1233,6 +1218,11 @@ impl<'t, 'e> Parser<'t, 'e> {
                         _ => FuncTyParam{ name: None
                                         , ty: p.eat_ty(true) },
                     },
+                    |p| match_eat!{ p.tts;
+                        sym!("...", loc) => Some(loc),
+                        _ => None,
+                    },
+                    |p| p.is_end(),
                 );
                 (Some(args), va)
             },
@@ -1648,11 +1638,12 @@ impl<'t, 'e> Parser<'t, 'e> {
                     |p| {
                         let pats = p.eat_many_sep(
                             symbol_type!("|"),
+                            "Expect a pattern",
+                            Parser::eat_pat,
                             |p| match p.tts.peek(0) {
                                 Some(&sym!("|")) => false,
                                 _ => !p.is_pat_begin(),
                             },
-                            Parser::eat_pat,
                         );
                         let cond = match_eat!{ p.tts;
                             kw!("if") =>
@@ -1772,11 +1763,12 @@ impl<'t, 'e> Parser<'t, 'e> {
         let args = if is_closed {
             vec![]
         } else {
-            self.eat_many_tail(
+            let (v, _) = self.eat_many_sep_tail(
                 symbol_type!(","),
-                Parser::try_eat_lambda_arg_end,
                 Parser::eat_lambda_param,
-            ).0
+                Parser::try_eat_lambda_arg_end,
+            );
+            v
         };
         let (ret_ty, body) = match_eat!{ self.tts;
             sym!("->") => (
@@ -1807,13 +1799,7 @@ impl<'t, 'e> Parser<'t, 'e> {
     fn eat_expr_struct_inner_end(
         &mut self,
     ) -> (Vec<ExprStructField<'t>>, Option<Box<Expr<'t>>>) {
-        let (v, base, _) = self.eat_many_tail_last(
-            symbol_type!(","),
-            |p| p.is_end(),
-            |p| match_eat!{ p.tts;
-                sym!("..") => Some(Box::new(p.eat_expr(false, true))),
-                _ => None,
-            },
+        let (v, base) = self.eat_many_comma_tail_last(
             |p| {
                 let name = p.eat_ident();
                 let expr = match_eat!{ p.tts;
@@ -1822,6 +1808,11 @@ impl<'t, 'e> Parser<'t, 'e> {
                 };
                 ExprStructField::Field{ name, expr }
             },
+            |p| match_eat!{ p.tts;
+                sym!("..") => Some(Box::new(p.eat_expr(false, true))),
+                _ => None,
+            },
+            |p| p.is_end(),
         );
         (v, base)
     }
