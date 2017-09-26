@@ -446,7 +446,10 @@ pub enum Pat<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DestructField<'a> {
-    Field { name: Ident<'a>, pat: Option<Box<Pat<'a>>> },
+    Field { ref_: OptSym<'a>
+          , mut_: OptSym<'a>
+          , name: Ident<'a>
+          , pat: Option<Box<Pat<'a>>> },
     Unknow(TT<'a>),
 }
 
