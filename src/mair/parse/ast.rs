@@ -149,9 +149,10 @@ pub struct Path<'a> {
 /// A path component, maybe with template hint (if any).
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PathComp<'a> {
-    Self_(LocStr<'a>),
-    Super(LocStr<'a>),
-    Name { name: Ident<'a>, hint: Option<Vec<TyHintArg<'a>>> },
+    Self_  (LocStr<'a>),
+    SelfTy_(LocStr<'a>),
+    Super  (LocStr<'a>),
+    Name   { name: Ident<'a>, hint: Option<Vec<TyHintArg<'a>>> },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

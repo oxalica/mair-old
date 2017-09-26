@@ -405,6 +405,7 @@ impl<'t, 'e> Parser<'t, 'e> {
     fn eat_path_comp(&mut self) -> PathComp<'t> {
         match_eat!{ self.tts;
             kw!("self", loc) => PathComp::Self_(loc),
+            kw!("Self", loc) => PathComp::SelfTy_(loc),
             kw!("super", loc) => PathComp::Super(loc),
             _ => {
                 let name = self.eat_ident();
@@ -1069,7 +1070,6 @@ impl<'t, 'e> Parser<'t, 'e> {
         match_eat!{ self.tts;
             ident!("_") => Ty::Hole,
             sym!("!") => Ty::Never,
-            kw!("Self") => Ty::Self_,
             tree!(loc, delim: Paren, tts) => {
                 let (mut v, tail) = self.new_inner(loc, tts)
                                         .eat_many_comma_tail_end(
