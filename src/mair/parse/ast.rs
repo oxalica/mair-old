@@ -268,7 +268,6 @@ pub enum Ty<'a> {
     Array  { ty: Box<Ty<'a>>, size: Box<Expr<'a>> },
     /// The function pointer type, like `fn(i32, u8) -> usize`.
     Func   (Box<FuncTy<'a>>),
-    Unknow (TT<'a>),
 }
 pub type Trait<'a> = Ty<'a>; // Types and traits are the same things at this
                              // time.
@@ -278,7 +277,6 @@ pub type Trait<'a> = Ty<'a>; // Types and traits are the same things at this
 pub enum TyApply<'a> {
     Angle { name: Path<'a>, args: Option<Vec<TyApplyArg<'a>>> },
     Paren { name: Path<'a>, args: Vec<Ty<'a>>, ret_ty: Option<Box<Ty<'a>>> },
-    Unknow(TT<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -286,7 +284,6 @@ pub enum TyApplyArg<'a> {
     Lifetime(Lifetime<'a>),
     Ty      (Ty<'a>),
     AssocTy { name: Ident<'a>, ty: Ty<'a> },
-    Unknow  (TT<'a>),
 }
 
 /// An attribute.
@@ -306,7 +303,6 @@ pub enum Meta<'a> {
     /// A meta with a list of sub-meta arguments,
     /// like `cfg(target_os="linux")`.
     Sub     { name: Ident<'a>, subs: Vec<Meta<'a>> },
-    Unknow  (TT<'a>),
 }
 
 /// A statement.
@@ -318,7 +314,6 @@ pub enum Stmt<'a> {
                 , expr: Option<Box<Expr<'a>>> },
     Expr        (Expr<'a>),
     PluginInvoke(PluginInvoke<'a>),
-    Unknow      (TT<'a>),
 }
 
 /// An expression.
@@ -391,22 +386,20 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
                 , arms:   Option<Vec<MatchArm<'a>>> },
     Return      { kw_loc: LocStr<'a>, expr: Option<Box<Expr<'a>>> },
     PluginInvoke(PluginInvoke<'a>),
-    Unknow      (TT<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ExprStructField<'a> {
-    Field { name: Ident<'a>, expr: Option<Box<Expr<'a>>> },
-    Unknow(TT<'a>),
+pub struct ExprStructField<'a> {
+    pub name: Ident<'a>,
+    pub expr: Option<Box<Expr<'a>>>,
 }
 
 /// A match arm.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum MatchArm<'a> {
-    Arm         { pats: Vec<Pat<'a>>
-                , cond: Option<Box<Expr<'a>>>
-                , expr: Option<Expr<'a>> },
-    Unknow      (TT<'a>),
+pub struct MatchArm<'a> {
+    pub pats: Vec<Pat<'a>>,
+    pub cond: Option<Box<Expr<'a>>>,
+    pub expr: Option<Expr<'a>>,
 }
 
 /// A pattern.
@@ -441,16 +434,14 @@ pub enum Pat<'a> {
                   , ellipsis: bool},
     /// A plugin/macro generating a pattern.
     PluginInvoke  (PluginInvoke<'a>),
-    Unknow        (TT<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum DestructField<'a> {
-    Field { ref_: OptSym<'a>
-          , mut_: OptSym<'a>
-          , name: Ident<'a>
-          , pat: Option<Box<Pat<'a>>> },
-    Unknow(TT<'a>),
+pub struct DestructField<'a> {
+    pub ref_: OptSym<'a>,
+    pub mut_: OptSym<'a>,
+    pub name: Ident<'a>,
+    pub pat:  Option<Box<Pat<'a>>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
