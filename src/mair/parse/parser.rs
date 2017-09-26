@@ -1063,7 +1063,7 @@ impl<'t, 'e> Parser<'t, 'e> {
             sym!(":") => Some(Box::new(self.eat_pat())),
             _ => None,
         };
-        DestructField::Field{ ref_, mut_, name, pat }
+        DestructField{ ref_, mut_, name, pat }
     }
 
     /// Eat and return a type. If `accect_traits`, it can accept
@@ -1656,7 +1656,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                             sym!("=>") => Some(p.eat_expr(false, true)),
                             _ => None,
                         };
-                        MatchArm::Arm{ pats, cond, expr }
+                        MatchArm{ pats, cond, expr }
                     },
                 );
                 Some(arms)
@@ -1808,7 +1808,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                     sym!(":") => Some(Box::new(p.eat_expr(false, true))),
                     _ => None,
                 };
-                ExprStructField::Field{ name, expr }
+                ExprStructField{ name, expr }
             },
             |p| match_eat!{ p.tts;
                 sym!("..") => Some(Box::new(p.eat_expr(false, true))),
