@@ -1056,12 +1056,14 @@ impl<'t, 'e> Parser<'t, 'e> {
 
     /// Eat and return a field of pattern on struct with fields.
     fn eat_destruct_field(&mut self) -> DestructField<'t> {
+        let ref_ = eatKw!(self.tts; "ref");
+        let mut_ = eatKw!(self.tts; "mut");
         let name = self.eat_ident();
         let pat = match_eat!{ self.tts;
             sym!(":") => Some(Box::new(self.eat_pat())),
             _ => None,
         };
-        DestructField::Field{ name, pat }
+        DestructField::Field{ ref_, mut_, name, pat }
     }
 
     /// Eat and return a type. If `accect_traits`, it can accept
