@@ -16,16 +16,16 @@ pub type fmax = f64;
 /// A module, a crate, or a rust source file.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Mod<'a> {
-    pub inner_attrs:  Vec<Attr<'a>>,
-    pub items:        Vec<Item<'a>>,
+    pub attrs: Vec<Attr<'a>>,
+    pub items: Vec<Item<'a>>,
 }
 
 /// An Item, which is the component of a crate/module.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Item<'a> {
-    pub outer_attrs: Vec<Attr<'a>>,
-    pub pub_:        OptSym<'a>,
-    pub detail:      ItemKind<'a>,
+    pub attrs:  Vec<Attr<'a>>,
+    pub pub_:   OptSym<'a>,
+    pub detail: ItemKind<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -42,14 +42,14 @@ pub enum ItemKind<'a> {
     /// `mod <name>;`
     ExternMod   { name: Ident<'a> },
     /// `mod <name> { <item1> ... }`
-    Mod         { name:  Ident<'a>, inner: Mod<'a> },
+    Mod         { name:  Ident<'a>, items: Vec<Item<'a>> },
     /// `fn <sig>;`
     FuncDecl    { sig: Box<FuncSig<'a>> },
     /// `fn <sig> <body>`
     /// The `body` will be always an `Expr::Block`.
     Func        { sig: Box<FuncSig<'a>>, body: Box<Expr<'a>> },
     /// `extern [abi] { <item1> ... }`
-    Extern      { abi: ABI<'a>, inner: Option<Mod<'a>> },
+    Extern      { abi: ABI<'a>, items: Option<Vec<Item<'a>>> },
     /// `type <alias> <template> [where_clause] [= <origin>];`
     Type        { alias:  Ident<'a>
                 , templ:  Template<'a>
@@ -87,18 +87,18 @@ pub enum ItemKind<'a> {
                 , templ: Template<'a>
                 , base:  Option<Box<Ty<'a>>>
                 , whs:   OptWhere<'a>
-                , inner: Option<Mod<'a>> },
+                , inner: Option<Mod<'a>> }, // TODO: no inner attributes
     /// `impl <template> <ty> [where_clause] { <item1> ... }`
     ImplType    { templ: Template<'a>
                 , ty:    Box<Ty<'a>>
                 , whs:   OptWhere<'a>
-                , inner: Option<Mod<'a>> },
+                , items: Option<Vec<Item<'a>>> },
     /// `impl <template> <tr> for <ty> [where_clause] { <item1> ... }`
     ImplTrait   { templ: Template<'a>
                 , tr:    Box<Trait<'a>>
                 , ty:    Box<Ty<'a>>
                 , whs:   OptWhere<'a>
-                , inner: Option<Mod<'a>> },
+                , items: Option<Vec<Item<'a>>> },
     PluginInvoke(PluginInvoke<'a>),
     Null,
 }
@@ -326,9 +326,9 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
     Struct      { ty: Box<Ty<'a>>
                 , fields: Option<Vec<ExprStructField<'a>>>
                 , base: Option<Box<Expr<'a>>> },
-    Block       { inner_attrs: Vec<Attr<'a>>
+    Block       { attrs: Vec<Attr<'a>>
                 , stmts: Vec<Stmt<'a>>
-                , ret: Option<Box<Expr<'a>>> },
+                , ret:   Option<Box<Expr<'a>>> },
     Unsafe      (Option<Box<Expr<'a>>>),
     MemberCall  { obj:  Box<Expr<'a>>
                 , func: PathComp<'a>
