@@ -357,14 +357,14 @@ impl<'t, 'e> Parser<'t, 'e> {
 
     /// Eat inner attributes and then items to the end.
     pub fn eat_mod_end(mut self) -> Mod<'t> {
-        let inner_attrs = self.eat_inner_attrs();
+        let attrs = self.eat_inner_attrs();
         let mut items = vec![];
         while !self.is_end() {
             if let Some(item) = self.eat_item() {
                 items.push(item);
             }
         }
-        Mod{ inner_attrs, items }
+        Mod{ attrs, items }
     }
 
     /// Eat and return inner attributes and items inside `{}`, or return None.
@@ -484,12 +484,12 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Eat an item. It will consume at lease one TT.
     /// Warning: There must be at least one TT left.
     fn eat_item(&mut self) -> Option<Item<'t>> {
-        let outer_attrs = self.eat_outer_attrs();
+        let mut attrs = self.eat_outer_attrs();
         let pub_ = eatKw!(self.tts; "pub");
-        let opt_detail = self.eat_opt_item_detail();
+        let opt_detail = self.eat_opt_item_detail(&mut attrs);
         let detail = match opt_detail {
             Some(x) => x,
-            None if outer_attrs.is_empty() && pub_.is_none() => {
+            None if attrs.is_empty() && pub_.is_none() => {
                 // havn't consumed `pub`
                 // "consumes nothing and nothing left" is impossible.
                 let (_, loc) = self.tts.next().unwrap(); // here <-/
@@ -498,38 +498,42 @@ impl<'t, 'e> Parser<'t, 'e> {
             },
             None => ItemKind::Null,
         };
-        Some(Item{ outer_attrs, pub_, detail })
+        Some(Item{ attrs, pub_, detail })
     }
 
     /// Eat and return the detail of an item, or return None.
-    fn eat_opt_item_detail(&mut self) -> Option<ItemKind<'t>> {
+    fn eat_opt_item_detail(
+        &mut self,
+        attrs: &mut Vec<Attr<'t>>,
+    ) -> Option<ItemKind<'t>> {
         if let Some(p) = self.eat_opt_plugin_invoke() {
             return Some(ItemKind::PluginInvoke(p));
         }
         match_eat!{ self.tts;
             kw!("extern"), kw!("crate") => Some(self.eat_extern_crate_tail()),
             kw!("use") => Some(self.eat_use_tail()),
-            kw!("mod") => Some(self.eat_mod_tail()),
+            kw!("mod") => Some(self.eat_mod_tail(attrs)),
             kw!("fn") =>
-                Some(self.eat_fn_tail(None, ABI::Normal)),
+                Some(self.eat_fn_tail(attrs, None, ABI::Normal)),
             kw!("extern"), kw!("fn") =>
-                Some(self.eat_fn_tail(None, ABI::Extern)),
+                Some(self.eat_fn_tail(attrs, None, ABI::Extern)),
             kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
-                Some(self.eat_fn_tail(None, ABI::Specific{ loc, abi })),
+                Some(self.eat_fn_tail(attrs, None, ABI::Specific{ loc, abi })),
             kw!("unsafe", lu), kw!("fn") =>
-                Some(self.eat_fn_tail(Some(lu), ABI::Normal)),
+                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Normal)),
             kw!("unsafe", lu), kw!("extern"), kw!("fn") =>
-                Some(self.eat_fn_tail(Some(lu), ABI::Extern)),
+                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Extern)),
             kw!("unsafe", lu), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
-                Some(self.eat_fn_tail(Some(lu), ABI::Specific{ loc, abi })),
-            kw!("extern") => Some(self.eat_extern_tail()),
+                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Specific{ loc
+                                                                    , abi })),
+            kw!("extern") => Some(self.eat_extern_tail(attrs)),
             kw!("type")   => Some(self.eat_type_tail()),
             kw!("struct") => Some(self.eat_struct_tail()),
             kw!("enum")   => Some(self.eat_enum_tail()),
             kw!("const")  => Some(self.eat_const_static_tail(false)),
             kw!("static") => Some(self.eat_const_static_tail(true)),
             kw!("trait")  => Some(self.eat_trait_tail()),
-            kw!("impl")   => Some(self.eat_impl_tail()),
+            kw!("impl")   => Some(self.eat_impl_tail(attrs)),
             _ => None,
         }
     }
@@ -605,28 +609,39 @@ impl<'t, 'e> Parser<'t, 'e> {
     }
 
     /// Eat the tail after `mod`.
-    fn eat_mod_tail(&mut self) -> ItemKind<'t> {
+    fn eat_mod_tail(&mut self, attrs: &mut Vec<Attr<'t>>) -> ItemKind<'t> {
         let name = self.eat_ident();
-        if let Some(inner) = self.eat_opt_brace_mod() {
-            ItemKind::Mod{ name, inner }
-        } else {
-            self.expect_semi();
-            ItemKind::ExternMod{ name }
+        match self.eat_opt_brace_mod() {
+            Some(Mod{ attrs: mut inner_attrs, items }) => {
+                attrs.append(&mut inner_attrs);
+                ItemKind::Mod{ name, items }
+            },
+            None => {
+                self.expect_semi();
+                ItemKind::ExternMod{ name }
+            },
         }
     }
 
     /// Eat the tail after `[unsafe] [extern [<abt>]] fn`.
     fn eat_fn_tail(
         &mut self,
+        attrs:   &mut Vec<Attr<'t>>,
         unsafe_: OptSym<'t>,
-        abi: ABI<'t>,
+        abi:     ABI<'t>,
     ) -> ItemKind<'t> {
         let sig = Box::new(self.eat_fn_sig(unsafe_, abi));
-        if let Some(body) = self.eat_opt_block_expr() {
-            ItemKind::Func{ sig, body: Box::new(body) }
-        } else {
-            self.expect_semi();
-            ItemKind::FuncDecl{ sig }
+        match self.eat_opt_block_expr() {
+            Some(Expr::Block{ attrs: mut inner_attrs, stmts, ret }) => {
+                attrs.append(&mut inner_attrs);
+                let block = Expr::Block{ attrs: vec![], stmts, ret };
+                ItemKind::Func{ sig, body: Box::new(block) }
+            },
+            Some(_) => unreachable!(),
+            None => {
+                self.expect_semi();
+                ItemKind::FuncDecl{ sig }
+            },
         }
     }
 
@@ -691,13 +706,19 @@ impl<'t, 'e> Parser<'t, 'e> {
     }
 
     /// Eat the tail after `extern` (item `extern`).
-    fn eat_extern_tail(&mut self) -> ItemKind<'t> {
+    fn eat_extern_tail(&mut self, attrs: &mut Vec<Attr<'t>>) -> ItemKind<'t> {
         let abi = match_eat!{ self.tts;
             lit_str!(abi, loc) => ABI::Specific{ loc, abi },
             _ => ABI::Extern,
         };
-        let inner = self.eat_opt_brace_mod();
-        ItemKind::Extern{ abi, inner }
+        match self.eat_opt_brace_mod() {
+            Some(Mod{ attrs: mut inner_attrs, items }) => {
+                attrs.append(&mut inner_attrs);
+                ItemKind::Extern{ abi, items: Some(items) }
+            },
+            None =>
+                ItemKind::Extern{ abi, items: None },
+        }
     }
 
     /// Eat the tail after `type`.
@@ -846,7 +867,7 @@ impl<'t, 'e> Parser<'t, 'e> {
     }
 
     /// Eat the tail after `impl`.
-    fn eat_impl_tail(&mut self) -> ItemKind<'t> {
+    fn eat_impl_tail(&mut self, attrs: &mut Vec<Attr<'t>>) -> ItemKind<'t> {
         let templ = self.eat_templ();
         let ty = Box::new(self.eat_ty(true));
         match_eat!{ self.tts;
@@ -854,13 +875,26 @@ impl<'t, 'e> Parser<'t, 'e> {
                 let tr = ty;
                 let ty = Box::new(self.eat_ty(true));
                 let whs = self.eat_opt_whs();
-                let inner = self.eat_opt_brace_mod();
-                ItemKind::ImplTrait{ templ, tr, ty, whs, inner }
+                match self.eat_opt_brace_mod() {
+                    Some(Mod{ attrs: mut inner_attrs, items }) => {
+                        attrs.append(&mut inner_attrs);
+                        let items = Some(items);
+                        ItemKind::ImplTrait{ templ, tr, ty, whs, items }
+                    },
+                    None =>
+                        ItemKind::ImplTrait{ templ, tr, ty, whs, items: None }
+                }
             },
             _ => {
                 let whs = self.eat_opt_whs();
-                let inner = self.eat_opt_brace_mod();
-                ItemKind::ImplType{ templ, ty, whs, inner }
+                match self.eat_opt_brace_mod() {
+                    Some(Mod{ attrs: mut inner_attrs, items }) => {
+                        attrs.append(&mut inner_attrs);
+                        let items = Some(items);
+                        ItemKind::ImplType{ templ, ty, whs, items }
+                    },
+                    None => ItemKind::ImplType{ templ, ty, whs, items: None },
+                }
             },
         }
     }
@@ -1673,7 +1707,7 @@ impl<'t, 'e> Parser<'t, 'e> {
             sym!(";") => true,
             _ => false,
         };
-        let inner_attrs = self.eat_inner_attrs();
+        let attrs = self.eat_inner_attrs();
         let mut stmts = vec![];
         let mut ret: Option<Expr> = None;
         while !self.is_end() {
@@ -1716,7 +1750,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                 },
             }}
         }
-        Expr::Block{ inner_attrs, stmts, ret: ret.map(Box::new) }
+        Expr::Block{ attrs, stmts, ret: ret.map(Box::new) }
     }
 
     /// Eat the inner of a array literal or filled array to the end, and return
