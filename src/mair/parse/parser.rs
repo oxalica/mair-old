@@ -355,15 +355,27 @@ impl<'t, 'e> Parser<'t, 'e> {
         self.tts.prev_last_pos()
     }
 
-    /// Eat inner attributes and then items to the end.
-    pub fn eat_mod_end(mut self) -> Mod<'t> {
-        let attrs = self.eat_inner_attrs();
-        let mut items = vec![];
+    /// Eat inner attributes and `f`s until the end.
+    fn eat_mod_like_end<T, F>(
+        &mut self,
+        attrs: &mut Vec<Attr<'t>>,
+        f:     F,
+    ) -> Vec<T>
+    where F: Fn(&mut Self) -> Option<T> {
+        attrs.append(&mut self.eat_inner_attrs());
+        let mut v = vec![];
         while !self.is_end() {
-            if let Some(item) = self.eat_item() {
-                items.push(item);
+            if let Some(x) = f(self) {
+                v.push(x);
             }
         }
+        v
+    }
+
+    /// Eat inner attributes and then items to the end.
+    pub fn eat_mod_end(mut self) -> Mod<'t> {
+        let mut attrs = vec![];
+        let items = self.eat_mod_like_end(&mut attrs, |p| p.eat_item());
         Mod{ attrs, items }
     }
 
@@ -645,15 +657,12 @@ impl<'t, 'e> Parser<'t, 'e> {
         }
     }
 
-    /// Eat and return the signature of a function.
-    fn eat_fn_sig(
+    /// Eat the parameter list to the end. Return (parameters, the location of
+    /// optional `...`).
+    fn eat_param_list_end(
         &mut self,
-        unsafe_: OptSym<'t>,
-        abi: ABI<'t>,
-    ) -> FuncSig<'t> {
-        let name = self.eat_ident();
-        let templ = self.eat_templ();
-        let (args, va) = match_eat!{ self.tts;
+    ) -> (Option<Vec<FuncParam<'t>>>, OptSym<'t>) {
+        match_eat!{ self.tts;
             tree!(loc, delim: Paren, tts) => {
                 let (args, va) = self.new_inner(loc, tts)
                                      .eat_many_comma_tail_last(
@@ -667,7 +676,18 @@ impl<'t, 'e> Parser<'t, 'e> {
                 (Some(args), va)
             },
             _ => (None, None),
-        };
+        }
+    }
+
+    /// Eat and return the signature of a function.
+    fn eat_fn_sig(
+        &mut self,
+        unsafe_: OptSym<'t>,
+        abi:     ABI<'t>,
+    ) -> FuncSig<'t> {
+        let name = self.eat_ident();
+        let templ = self.eat_templ();
+        let (args, va) = self.eat_param_list_end();
         let ret_ty = self.eat_opt_ret_ty();
         let whs = self.eat_opt_whs();
         FuncSig{ unsafe_, abi, name, templ, args, va, ret_ty, whs }
@@ -711,13 +731,50 @@ impl<'t, 'e> Parser<'t, 'e> {
             lit_str!(abi, loc) => ABI::Specific{ loc, abi },
             _ => ABI::Extern,
         };
-        match self.eat_opt_brace_mod() {
-            Some(Mod{ attrs: mut inner_attrs, items }) => {
-                attrs.append(&mut inner_attrs);
+        match_eat!{ self.tts;
+            tree!(loc, delim: Brace, tts) => {
+                let items = self.new_inner(loc, tts)
+                                .eat_mod_like_end(
+                                    attrs,
+                                    |p| p.eat_extern_item(),
+                                );
                 ItemKind::Extern{ abi, items: Some(items) }
             },
-            None =>
-                ItemKind::Extern{ abi, items: None },
+            _ => ItemKind::Extern{ abi, items: None },
+        }
+    }
+
+    /// Eat and return an item inside `extern` block. It will consume at least
+    /// one TT.
+    ///
+    /// Warning: Never call it when `is_end()`.
+    fn eat_extern_item(&mut self) -> Option<ExternItem<'t>> {
+        let attrs = self.eat_outer_attrs();
+        let pub_ = eatKw!(self.tts; "pub");
+        match_eat!{ self.tts;
+            kw!("fn") => {
+                let name = self.eat_ident();
+                let (args, va) = self.eat_param_list_end();
+                let ret_ty = self.eat_opt_ret_ty();
+                self.expect_semi();
+                let detail = ExternItemKind::Func{ name, args, va, ret_ty };
+                Some(ItemWrap{ attrs, pub_, detail })
+            },
+            kw!("static") => {
+                let name = self.eat_ident();
+                let ty = match_eat!{ self.tts;
+                    sym!(":") => Some(Box::new(self.eat_ty(true))),
+                    _ => None,
+                };
+                self.expect_semi();
+                let detail = ExternItemKind::Static{ name, ty };
+                Some(ItemWrap{ attrs, pub_, detail })
+            },
+            tok!(_, loc) => {
+                self.err(loc, "Expect `fn` or `static`");
+                None
+            },
+            _ => unreachable!(), // not `is_end`
         }
     }
 
@@ -862,38 +919,162 @@ impl<'t, 'e> Parser<'t, 'e> {
             _ => None,
         };
         let whs = self.eat_opt_whs();
-        let inner = self.eat_opt_brace_mod();
-        ItemKind::Trait{ name, templ, base, whs, inner }
+        match_eat!{ self.tts;
+            tree!(loc, delim: Brace, tts) => {
+                let mut items = vec![];
+                let mut p = self.new_inner(loc, tts);
+                while !p.is_end() {
+                    if let Some(x) = p.eat_trait_item() {
+                        items.push(x);
+                    }
+                }
+                ItemKind::Trait{ name, templ, base, whs, items: Some(items) }
+            },
+            _ => ItemKind::Trait{ name, templ, base, whs, items: None },
+        }
+    }
+
+    /// Eat `fn` item like `[unsafe] [extern [<abi>]] fn ...`. Return None if
+    /// fails.
+    fn eat_fn_item(
+        &mut self,
+        attrs: &mut Vec<Attr<'t>>,
+    ) -> Option<ItemKind<'t>> {
+        match_eat!{ self.tts;
+            kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, None, ABI::Normal)),
+            kw!("extern"), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, None, ABI::Extern)),
+            kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs,
+                                      None,
+                                      ABI::Specific{ loc, abi })),
+            kw!("unsafe", lu), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Normal)),
+            kw!("unsafe", lu), kw!("extern"), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Extern)),
+            kw!("unsafe", lu), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs,
+                                      Some(lu),
+                                      ABI::Specific{ loc, abi })),
+            _ => None,
+        }
+    }
+
+    /// Eat and return an item inside `trait` block. It will consume at least
+    /// one TT.
+    ///
+    /// Warning: Never call it when `is_end()`.
+    fn eat_trait_item(&mut self) -> Option<TraitItem<'t>> {
+        let mut attrs = self.eat_outer_attrs();
+        let pub_ = eatKw!(self.tts; "pub");
+        match_eat!{ self.tts;
+            kw!("type") => {
+                let name = self.eat_ident();
+                let default = match_eat!{ self.tts;
+                    sym!("=") => Some(Box::new(self.eat_ty(true))),
+                    _ => None,
+                };
+                self.expect_semi();
+                let detail = TraitItemKind::AssocTy{ name, default };
+                Some(ItemWrap{ attrs, pub_, detail })
+            },
+            _ => {
+                match self.eat_fn_item(&mut attrs) {
+                    None => match_eat!{ self.tts;
+                        tok!(_, loc) => {
+                            self.err(loc, "Expect a `type` or `fn` item`");
+                            None
+                        },
+                        _ => unreachable!(), // not `is_end`
+                    },
+                    Some(ItemKind::Func{ sig, body }) => {
+                        let detail = TraitItemKind::Func{
+                            sig,
+                            default: Some(body),
+                        };
+                        Some(ItemWrap{ attrs, pub_, detail })
+                    },
+                    Some(ItemKind::FuncDecl{ sig }) => {
+                        let detail = TraitItemKind::Func{ sig, default: None };
+                        Some(ItemWrap{ attrs, pub_, detail })
+                    },
+                    Some(_) => unreachable!(), // eat_fn_tail() never return
+                                               // others
+                }
+            },
+        }
     }
 
     /// Eat the tail after `impl`.
     fn eat_impl_tail(&mut self, attrs: &mut Vec<Attr<'t>>) -> ItemKind<'t> {
         let templ = self.eat_templ();
         let ty = Box::new(self.eat_ty(true));
+        let mut block = |p: &mut Self| match_eat!{ p.tts;
+            tree!(loc, delim: Brace, tts) => {
+                let items = p.new_inner(loc, tts)
+                                .eat_mod_like_end(
+                                    attrs,
+                                    |q| q.eat_impl_item(),
+                                );
+                Some(items)
+            },
+            _ => None,
+        };
         match_eat!{ self.tts;
             kw!("for") => {
                 let tr = ty;
                 let ty = Box::new(self.eat_ty(true));
                 let whs = self.eat_opt_whs();
-                match self.eat_opt_brace_mod() {
-                    Some(Mod{ attrs: mut inner_attrs, items }) => {
-                        attrs.append(&mut inner_attrs);
-                        let items = Some(items);
-                        ItemKind::ImplTrait{ templ, tr, ty, whs, items }
-                    },
-                    None =>
-                        ItemKind::ImplTrait{ templ, tr, ty, whs, items: None }
-                }
+                ItemKind::ImplTrait{ templ, tr, ty, whs, items: block(self) }
             },
             _ => {
                 let whs = self.eat_opt_whs();
-                match self.eat_opt_brace_mod() {
-                    Some(Mod{ attrs: mut inner_attrs, items }) => {
-                        attrs.append(&mut inner_attrs);
-                        let items = Some(items);
-                        ItemKind::ImplType{ templ, ty, whs, items }
+                ItemKind::ImplType{ templ, ty, whs, items: block(self) }
+            },
+        }
+    }
+
+    /// Eat and return an item inside `impl` block. It will consume at least
+    /// one TT.
+    ///
+    /// Warning: Never call it when `is_end()`.
+    fn eat_impl_item(&mut self) -> Option<ImplItem<'t>> {
+        let mut attrs = self.eat_outer_attrs();
+        let pub_ = eatKw!(self.tts; "pub");
+        match_eat!{ self.tts;
+            kw!("type") => {
+                let name = self.eat_ident();
+                let val = match_eat!{ self.tts;
+                    sym!("=") => Some(Box::new(self.eat_ty(true))),
+                    _ => None,
+                };
+                self.expect_semi();
+                let detail = ImplItemKind::AssocTy{ name, val };
+                Some(ItemWrap{ attrs, pub_, detail })
+            },
+            _ => {
+                match self.eat_fn_item(&mut attrs) {
+                    None => match_eat!{ self.tts;
+                        tok!(_, loc) => {
+                            self.err(loc, "Expect a `type` or `fn` item`");
+                            None
+                        },
+                        _ => unreachable!(), // not `is_end`
                     },
-                    None => ItemKind::ImplType{ templ, ty, whs, items: None },
+                    Some(ItemKind::Func{ sig, body }) => {
+                        let detail = ImplItemKind::Func{
+                            sig,
+                            body: Some(body),
+                        };
+                        Some(ItemWrap{ attrs, pub_, detail })
+                    },
+                    Some(ItemKind::FuncDecl{ sig }) => {
+                        let detail = ImplItemKind::Func{ sig, body: None };
+                        Some(ItemWrap{ attrs, pub_, detail })
+                    },
+                    Some(_) => unreachable!(), // eat_fn_tail() never return
+                                               // others
                 }
             },
         }

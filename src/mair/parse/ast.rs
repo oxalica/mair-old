@@ -21,11 +21,14 @@ pub struct Mod<'a> {
 }
 
 /// An Item, which is the component of a crate/module.
+pub type Item<'a> = ItemWrap<'a, ItemKind<'a>>;
+
+/// An Item with detail type `T`.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Item<'a> {
+pub struct ItemWrap<'a, T> {
     pub attrs:  Vec<Attr<'a>>,
     pub pub_:   OptSym<'a>,
-    pub detail: ItemKind<'a>,
+    pub detail: T,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -49,7 +52,7 @@ pub enum ItemKind<'a> {
     /// The `body` will be always an `Expr::Block`.
     Func        { sig: Box<FuncSig<'a>>, body: Box<Expr<'a>> },
     /// `extern [abi] { <item1> ... }`
-    Extern      { abi: ABI<'a>, items: Option<Vec<Item<'a>>> },
+    Extern      { abi: ABI<'a>, items: Option<Vec<ExternItem<'a>>> },
     /// `type <alias> <template> [where_clause] [= <origin>];`
     Type        { alias:  Ident<'a>
                 , templ:  Template<'a>
@@ -87,18 +90,18 @@ pub enum ItemKind<'a> {
                 , templ: Template<'a>
                 , base:  Option<Box<Ty<'a>>>
                 , whs:   OptWhere<'a>
-                , inner: Option<Mod<'a>> }, // TODO: no inner attributes
+                , items: Option<Vec<TraitItem<'a>>> },
     /// `impl <template> <ty> [where_clause] { <item1> ... }`
     ImplType    { templ: Template<'a>
                 , ty:    Box<Ty<'a>>
                 , whs:   OptWhere<'a>
-                , items: Option<Vec<Item<'a>>> },
+                , items: Option<Vec<ImplItem<'a>>> },
     /// `impl <template> <tr> for <ty> [where_clause] { <item1> ... }`
     ImplTrait   { templ: Template<'a>
                 , tr:    Box<Trait<'a>>
                 , ty:    Box<Ty<'a>>
                 , whs:   OptWhere<'a>
-                , items: Option<Vec<Item<'a>>> },
+                , items: Option<Vec<ImplItem<'a>>> },
     PluginInvoke(PluginInvoke<'a>),
     Null,
 }
@@ -108,6 +111,41 @@ pub enum ItemKind<'a> {
 pub enum UseName<'a> {
     Self_ (LocStr<'a>),
     Name  { name: Ident<'a>, alias: Option<Ident<'a>> },
+}
+
+pub type ExternItem<'a> = ItemWrap<'a, ExternItemKind<'a>>;
+
+/// An item inside `extern` block.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ExternItemKind<'a> {
+    Func  { name:   Ident<'a>
+          , args:   Option<Vec<FuncParam<'a>>>
+          , va:     OptSym<'a>
+          , ret_ty: Option<Box<Ty<'a>>> },
+    Static{ name:  Ident<'a>
+          , ty:    Option<Box<Ty<'a>>> }
+}
+
+pub type TraitItem<'a> = ItemWrap<'a, TraitItemKind<'a>>;
+
+/// An item inside `trait` block.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TraitItemKind<'a> {
+    AssocTy{ name: Ident<'a>
+           , default: Option<Box<Ty<'a>>> },
+    Func   { sig:     Box<FuncSig<'a>>
+           , default: Option<Box<Expr<'a>>> },
+}
+
+pub type ImplItem<'a> = ItemWrap<'a, ImplItemKind<'a>>;
+
+/// An item inside `impl` block.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ImplItemKind<'a> {
+    AssocTy{ name:  Ident<'a>
+           , val:   Option<Box<Ty<'a>>> },
+    Func   { sig:   Box<FuncSig<'a>>
+           , body:  Option<Box<Expr<'a>>> },
 }
 
 /// An element of a tuple-like struct or enum variant.
