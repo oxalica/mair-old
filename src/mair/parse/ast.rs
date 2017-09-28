@@ -52,12 +52,12 @@ pub enum ItemKind<'a> {
     /// The `body` will be always an `Expr::Block`.
     Func        { sig: Box<FuncSig<'a>>, body: Box<Expr<'a>> },
     /// `extern [abi] { <item1> ... }`
-    Extern      { abi: ABI<'a>, items: Option<Vec<ExternItem<'a>>> },
+    Extern      { abi: ABI<'a>, items: Vec<ExternItem<'a>> },
     /// `type <alias> <template> [where_clause] [= <origin>];`
     Type        { alias:  Ident<'a>
                 , templ:  Template<'a>
                 , whs:    OptWhere<'a>
-                , origin: Option<Box<Ty<'a>>> },
+                , origin: Box<Ty<'a>> },
     /// `struct <name> <template> [where_clause];`
     StructUnit  { name:  Ident<'a>
                 , templ: Template<'a>
@@ -76,32 +76,32 @@ pub enum ItemKind<'a> {
     Enum        { name:  Ident<'a>
                 , templ: Template<'a>
                 , whs:   OptWhere<'a>
-                , vars:  Option<Vec<EnumVar<'a>>> },
+                , vars:  Vec<EnumVar<'a>> },
     /// `const <name>: <ty> = <val>;`
     Const       { name: Ident<'a>
-                , ty:   Option<Box<Ty<'a>>>
-                , val:  Option<Box<Expr<'a>>> },
+                , ty:   Box<Ty<'a>>
+                , val:  Box<Expr<'a>> },
     /// `static <name>: <ty> = <val>;`
     Static      { name: Ident<'a>
-                , ty:   Option<Box<Ty<'a>>>
-                , val:  Option<Box<Expr<'a>>> },
+                , ty:   Box<Ty<'a>>
+                , val:  Box<Expr<'a>> },
     /// `trait <name> <template> [where_clause] { <item1> ... }`
     Trait       { name:  Ident<'a>
                 , templ: Template<'a>
                 , base:  Option<Box<Ty<'a>>>
                 , whs:   OptWhere<'a>
-                , items: Option<Vec<TraitItem<'a>>> },
+                , items: Vec<TraitItem<'a>> },
     /// `impl <template> <ty> [where_clause] { <item1> ... }`
     ImplType    { templ: Template<'a>
                 , ty:    Box<Ty<'a>>
                 , whs:   OptWhere<'a>
-                , items: Option<Vec<ImplItem<'a>>> },
+                , items: Vec<ImplItem<'a>> },
     /// `impl <template> <tr> for <ty> [where_clause] { <item1> ... }`
     ImplTrait   { templ: Template<'a>
                 , tr:    Box<Trait<'a>>
                 , ty:    Box<Ty<'a>>
                 , whs:   OptWhere<'a>
-                , items: Option<Vec<ImplItem<'a>>> },
+                , items: Vec<ImplItem<'a>> },
     PluginInvoke(PluginInvoke<'a>),
     Null,
 }
@@ -119,7 +119,7 @@ pub type ExternItem<'a> = ItemWrap<'a, ExternItemKind<'a>>;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ExternItemKind<'a> {
     Func  { name:   Ident<'a>
-          , args:   Option<Vec<FuncParam<'a>>>
+          , args:   Vec<FuncParam<'a>>
           , va:     OptSym<'a>
           , ret_ty: Option<Box<Ty<'a>>> },
     Static{ name:  Ident<'a>
@@ -143,9 +143,9 @@ pub type ImplItem<'a> = ItemWrap<'a, ImplItemKind<'a>>;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ImplItemKind<'a> {
     AssocTy{ name:  Ident<'a>
-           , val:   Option<Box<Ty<'a>>> },
+           , val:   Box<Ty<'a>> },
     Func   { sig:   Box<FuncSig<'a>>
-           , body:  Option<Box<Expr<'a>>> },
+           , body:  Box<Expr<'a>> },
 }
 
 /// An element of a tuple-like struct or enum variant.
@@ -162,7 +162,7 @@ pub struct StructField<'a> {
     pub attrs: Vec<Attr<'a>>,
     pub pub_:  OptSym<'a>,
     pub name:  Ident<'a>,
-    pub ty:    Option<Ty<'a>>,
+    pub ty:    Ty<'a>,
 }
 
 /// An variant of an `enum`.
@@ -214,8 +214,8 @@ pub type OptWhere<'a> = Option<Where<'a>>;
 /// A trait bound or lifetime restriction.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Restrict<'a> {
-    LifeBound  { lt: Lifetime<'a>, bound: Option<Vec<Lifetime<'a>>> },
-    TraitBound { ty: Ty<'a>, bound: Option<Trait<'a>> },
+    LifeBound  { lt: Lifetime<'a>, bound: Vec<Lifetime<'a>> },
+    TraitBound { ty: Ty<'a>, bound: Trait<'a> },
 }
 
 /// The signature of a function, including templates, trait bounds,
@@ -226,7 +226,7 @@ pub struct FuncSig<'a> {
     pub abi:     ABI<'a>,
     pub name:    Ident<'a>,
     pub templ:   Template<'a>,
-    pub args:    Option<Vec<FuncParam<'a>>>,
+    pub args:    Vec<FuncParam<'a>>,
     pub va:      OptSym<'a>,
     pub ret_ty:  Option<Box<Ty<'a>>>,
     pub whs:     OptWhere<'a>,
@@ -248,7 +248,7 @@ pub enum FuncParam<'a> {
     SelfMove{ mut_: OptSym<'a> },
     SelfRef { mut_: OptSym<'a> },
     SelfAs  (Ty<'a>),
-    Bind    { pat: Pat<'a>, ty: Option<Box<Ty<'a>>> },
+    Bind    { pat: Pat<'a>, ty: Box<Ty<'a>> },
 }
 
 /// The type of a function.
@@ -256,7 +256,7 @@ pub enum FuncParam<'a> {
 pub struct FuncTy<'a> {
     pub unsafe_: OptSym<'a>,
     pub abi:     ABI<'a>,
-    pub args:    Option<Vec<FuncTyParam<'a>>>,
+    pub args:    Vec<FuncTyParam<'a>>,
     pub va:      OptSym<'a>,
     pub ret_ty:  Option<Box<Ty<'a>>>,
 }
@@ -278,6 +278,8 @@ pub enum ABI<'a> {
 /// A type.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Ty<'a> {
+    /// The error type. Used in codes with syntax errors.
+    Error,
     /// The placeholder `_`.
     Hole,
     /// The type `!`.
@@ -313,7 +315,7 @@ pub type Trait<'a> = Ty<'a>; // Types and traits are the same things at this
 /// A simple type, specialized type or trait.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TyApply<'a> {
-    Angle { name: Path<'a>, args: Option<Vec<TyApplyArg<'a>>> },
+    Angle { name: Path<'a>, args: Vec<TyApplyArg<'a>> },
     Paren { name: Path<'a>, args: Vec<Ty<'a>>, ret_ty: Option<Box<Ty<'a>>> },
 }
 
@@ -348,8 +350,8 @@ pub enum Meta<'a> {
 pub enum Stmt<'a> {
     Item        (Box<Item<'a>>),
     Let         { pat:  Pat<'a>
-                , ty:   Option<Box<Ty<'a>>>
-                , expr: Option<Box<Expr<'a>>> },
+                , ty:   Box<Ty<'a>>
+                , expr: Box<Expr<'a>> },
     Expr        (Expr<'a>),
     PluginInvoke(PluginInvoke<'a>),
 }
@@ -357,17 +359,19 @@ pub enum Stmt<'a> {
 /// An expression.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
+    /// The error expression. Used in codes with syntax errors.
+    Error,
     Literal     (Literal<'a>),
     Path        (Path<'a>),
     Tuple       (Vec<Expr<'a>>),
     Paren       (Box<Expr<'a>>),
-    Struct      { ty: Box<Ty<'a>>
-                , fields: Option<Vec<ExprStructField<'a>>>
-                , base: Option<Box<Expr<'a>>> },
+    Struct      { ty:     Box<Ty<'a>>
+                , fields: Vec<ExprStructField<'a>>
+                , base:   Option<Box<Expr<'a>>> },
     Block       { attrs: Vec<Attr<'a>>
                 , stmts: Vec<Stmt<'a>>
                 , ret:   Option<Box<Expr<'a>>> },
-    Unsafe      (Option<Box<Expr<'a>>>),
+    Unsafe      (Box<Expr<'a>>),
     MemberCall  { obj:  Box<Expr<'a>>
                 , func: PathComp<'a>
                 , par_loc: LocStr<'a>
@@ -392,36 +396,36 @@ pub enum Expr<'a> { // https://doc.rust-lang.org/reference/expressions.html
                 , par_loc: LocStr<'a>
                 , args: Vec<Expr<'a>> },
     Lambda      { sig:  Box<LambdaSig<'a>>
-                , body: Option<Box<Expr<'a>>> },
+                , body: Box<Expr<'a>> },
     Break       { label:  Option<Lifetime<'a>>
                 , kw_loc: LocStr<'a>
                 , expr:  Option<Box<Expr<'a>>> },
     Continue    { label: Option<Lifetime<'a>>, kw_loc: LocStr<'a> },
     Loop        { label:  Option<Lifetime<'a>>
-                , body:   Option<Box<Expr<'a>>> },
+                , body:   Box<Expr<'a>> },
     While       { label: Option<Lifetime<'a>>
                 , cond: Box<Expr<'a>>
-                , body: Option<Box<Expr<'a>>> },
+                , body: Box<Expr<'a>> },
     WhileLet    { pat:  Box<Pat<'a>>
-                , expr: Option<Box<Expr<'a>>>
-                , body: Option<Box<Expr<'a>>> },
+                , expr: Box<Expr<'a>>
+                , body: Box<Expr<'a>> },
     For         { label: Option<Lifetime<'a>>
-                , pat:  Box<Pat<'a>>
-                , iter: Option<Box<Expr<'a>>>
-                , body: Option<Box<Expr<'a>>> },
+                , pat:   Box<Pat<'a>>
+                , iter:  Box<Expr<'a>>
+                , body:  Box<Expr<'a>> },
     // else_expr ~ None          No else branch. ok.
     //           ~ Some(None)    `.. else <not {}>` err.
     //           ~ Some(Some(e)) `.. else <e>` ok.
     If          { cond:      Box<Expr<'a>>
-                , then_expr: Option<Box<Expr<'a>>>
-                , else_expr: Option<Option<Box<Expr<'a>>>> },
+                , then_expr: Box<Expr<'a>>
+                , else_expr: Option<Box<Expr<'a>>> },
     IfLet       { pat:        Box<Pat<'a>>
-                , match_expr: Option<Box<Expr<'a>>>
-                , then_expr:  Option<Box<Expr<'a>>>
-                , else_expr:  Option<Option<Box<Expr<'a>>>> },
+                , match_expr: Box<Expr<'a>>
+                , then_expr:  Box<Expr<'a>>
+                , else_expr:  Option<Box<Expr<'a>>> },
     Match       { kw_loc: LocStr<'a>
                 , expr:   Box<Expr<'a>>
-                , arms:   Option<Vec<MatchArm<'a>>> },
+                , arms:   Vec<MatchArm<'a>> },
     Return      { kw_loc: LocStr<'a>, expr: Option<Box<Expr<'a>>> },
     PluginInvoke(PluginInvoke<'a>),
 }
@@ -437,7 +441,7 @@ pub struct ExprStructField<'a> {
 pub struct MatchArm<'a> {
     pub pats: Vec<Pat<'a>>,
     pub cond: Option<Box<Expr<'a>>>,
-    pub expr: Option<Expr<'a>>,
+    pub expr: Box<Expr<'a>>,
 }
 
 /// A pattern.
@@ -498,7 +502,7 @@ pub enum Delimiter {
 pub struct PluginInvoke<'a> {
     pub name:  Ident<'a>,
     pub ident: Option<Ident<'a>>,
-    pub tt:    Option<TT<'a>>, // must be TokenTree::Tree
+    pub tt:    TT<'a>, // must be TokenTree::Tree
 }
 
 /// A token tree with location.
@@ -558,7 +562,7 @@ impl<'a> Ty<'a> {
     pub fn from_path(path: Path<'a>) -> Self {
         Ty::Apply(Box::new(TyApply::Angle{
             name: path,
-            args: None,
+            args: vec![],
         }))
     }
 
@@ -589,7 +593,7 @@ impl<'a> Expr<'a> {
             Expr::IfLet{ .. } |
             Expr::Match{ .. } |
             Expr::PluginInvoke(PluginInvoke{
-                tt: Some((TTKind::Tree{ delim: Delimiter::Brace, .. }, _)),
+                tt: (TTKind::Tree{ delim: Delimiter::Brace, .. }, _),
                 ..
             }) => true,
             _ => false,
