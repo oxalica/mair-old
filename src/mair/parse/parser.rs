@@ -478,7 +478,7 @@ impl<'t, 'e> Parser<'t, 'e> {
         }
     }
 
-    /// Eat a valid meta, or return Meta::Null without consuming any TT.
+    /// Eat a valid meta.
     fn eat_meta(&mut self) -> Meta<'t> {
         let name = self.eat_ident();
         match_eat!{ self.tts;
@@ -510,7 +510,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                 self.err(loc, "Unknow beginning of item");
                 return None
             },
-            None => ItemKind::Null,
+            None => return None,
         };
         Some(Item{ attrs, is_pub, detail })
     }

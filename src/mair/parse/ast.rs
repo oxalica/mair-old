@@ -45,11 +45,10 @@ pub enum ItemKind<'a> {
     /// `mod <name>;`
     ExternMod   { name: Ident<'a> },
     /// `mod <name> { <item1> ... }`
-    Mod         { name:  Ident<'a>, items: Vec<Item<'a>> },
+    Mod         { name: Ident<'a>, items: Vec<Item<'a>> },
     /// `fn <sig>;`
     FuncDecl    { sig: Box<FuncSig<'a>> },
     /// `fn <sig> <body>`
-    /// The `body` will be always an `Expr::Block`.
     Func        { sig: Box<FuncSig<'a>>, body: Box<Expr<'a>> },
     /// `extern [abi] { <item1> ... }`
     Extern      { abi: ABI<'a>, items: Vec<ExternItem<'a>> },
@@ -103,7 +102,6 @@ pub enum ItemKind<'a> {
                 , whs:   OptWhere<'a>
                 , items: Vec<ImplItem<'a>> },
     PluginInvoke(PluginInvoke<'a>),
-    Null,
 }
 
 /// A single name referred in a `use` declaration.
