@@ -132,8 +132,8 @@ macro_rules! symBack {
 
 macro_rules! eatKw {
     ($s:expr; $kw:tt) => { match_eat!{ $s;
-        kw!($kw, loc) => Some(loc),
-        _ => None,
+        kw!($kw) => true,
+        _ => false,
     }}
 }
 
@@ -499,11 +499,11 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Warning: There must be at least one TT left.
     fn eat_item(&mut self) -> Option<Item<'t>> {
         let mut attrs = self.eat_outer_attrs();
-        let pub_ = eatKw!(self.tts; "pub");
+        let is_pub = eatKw!(self.tts; "pub");
         let opt_detail = self.eat_opt_item_detail(&mut attrs);
         let detail = match opt_detail {
             Some(x) => x,
-            None if attrs.is_empty() && pub_.is_none() => {
+            None if attrs.is_empty() && !is_pub => {
                 // havn't consumed `pub`
                 // "consumes nothing and nothing left" is impossible.
                 let (_, loc) = self.tts.next().unwrap(); // here <-/
@@ -512,7 +512,7 @@ impl<'t, 'e> Parser<'t, 'e> {
             },
             None => ItemKind::Null,
         };
-        Some(Item{ attrs, pub_, detail })
+        Some(Item{ attrs, is_pub, detail })
     }
 
     /// Eat and return the detail of an item, or return None.
@@ -528,17 +528,17 @@ impl<'t, 'e> Parser<'t, 'e> {
             kw!("use") => Some(self.eat_use_tail()),
             kw!("mod") => Some(self.eat_mod_tail(attrs)),
             kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, None, ABI::Normal)),
+                Some(self.eat_fn_tail(attrs, false, ABI::Normal)),
             kw!("extern"), kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, None, ABI::Extern)),
+                Some(self.eat_fn_tail(attrs, false, ABI::Extern)),
             kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, None, ABI::Specific{ loc, abi })),
-            kw!("unsafe", lu), kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Normal)),
-            kw!("unsafe", lu), kw!("extern"), kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Extern)),
-            kw!("unsafe", lu), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Specific{ loc
+                Some(self.eat_fn_tail(attrs, false, ABI::Specific{ loc, abi })),
+            kw!("unsafe"), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, true, ABI::Normal)),
+            kw!("unsafe"), kw!("extern"), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, true, ABI::Extern)),
+            kw!("unsafe"), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, true, ABI::Specific{ loc
                                                                     , abi })),
             kw!("extern") => Some(self.eat_extern_tail(attrs)),
             kw!("type")   => Some(self.eat_type_tail()),
@@ -640,11 +640,11 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Eat the tail after `[unsafe] [extern [<abt>]] fn`.
     fn eat_fn_tail(
         &mut self,
-        attrs:   &mut Vec<Attr<'t>>,
-        unsafe_: OptSym<'t>,
-        abi:     ABI<'t>,
+        attrs:     &mut Vec<Attr<'t>>,
+        is_unsafe: bool,
+        abi:       ABI<'t>,
     ) -> ItemKind<'t> {
-        let sig = Box::new(self.eat_fn_sig(unsafe_, abi));
+        let sig = Box::new(self.eat_fn_sig(is_unsafe, abi));
         match self.eat_block_expr() {
             Expr::Block{ attrs: mut inner_attrs, stmts, ret } => {
                 attrs.append(&mut inner_attrs);
@@ -664,23 +664,23 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// parens, it will emit an error.
     fn eat_param_list_end(
         &mut self,
-    ) -> (Vec<FuncParam<'t>>, OptSym<'t>) {
+    ) -> (Vec<FuncParam<'t>>, bool) {
         match_eat!{ self.tts;
             tree!(loc, delim: Paren, tts) => {
-                let (args, va) = self.new_inner(loc, tts)
+                let (args, va_) = self.new_inner(loc, tts)
                                      .eat_many_comma_tail_last(
                     Parser::eat_func_param,
                     |p| match_eat!{ p.tts;
-                        sym!("...", loc) => Some(loc),
+                        sym!("...") => Some(()),
                         _ => None,
                     },
                     |p| p.is_end(),
                 );
-                (args, va)
+                (args, va_.is_some())
             },
             _ => {
                 self.err_prev("Expect the parameter list");
-                (vec![], None)
+                (vec![], false)
             },
         }
     }
@@ -688,30 +688,30 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Eat and return the signature of a function.
     fn eat_fn_sig(
         &mut self,
-        unsafe_: OptSym<'t>,
-        abi:     ABI<'t>,
+        is_unsafe: bool,
+        abi:       ABI<'t>,
     ) -> FuncSig<'t> {
         let name = self.eat_ident();
         let templ = self.eat_templ();
-        let (args, va) = self.eat_param_list_end();
+        let (args, is_va) = self.eat_param_list_end();
         let ret_ty = self.eat_opt_ret_ty();
         let whs = self.eat_opt_whs();
-        FuncSig{ unsafe_, abi, name, templ, args, va, ret_ty, whs }
+        FuncSig{ is_unsafe, abi, name, templ, args, is_va, ret_ty, whs }
     }
 
     /// Eat and return a parameter of function.
     fn eat_func_param(&mut self) -> FuncParam<'t> {
         match_eat!{ self.tts;
-            sym!("&"), kw!("mut", loc), kw!("self") =>
-                FuncParam::SelfRef{ mut_: Some(loc) },
+            sym!("&"), kw!("mut"), kw!("self") =>
+                FuncParam::SelfRef{ is_mut: true },
             sym!("&"), kw!("self") =>
-                FuncParam::SelfRef{ mut_: None },
+                FuncParam::SelfRef{ is_mut: false },
             kw!("self"), sym!(":") =>
                 FuncParam::SelfAs(self.eat_ty(true)),
-            kw!("mut", loc), kw!("self") =>
-                FuncParam::SelfMove{ mut_: Some(loc) },
+            kw!("mut"), kw!("self") =>
+                FuncParam::SelfMove{ is_mut: true },
             kw!("self") =>
-                FuncParam::SelfMove{ mut_: None },
+                FuncParam::SelfMove{ is_mut: false },
             _ => {
                 let pat = self.eat_pat();
                 let ty = match_eat!{ self.tts;
@@ -762,15 +762,15 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Warning: Never call it when `is_end()`.
     fn eat_extern_item(&mut self) -> Option<ExternItem<'t>> {
         let attrs = self.eat_outer_attrs();
-        let pub_ = eatKw!(self.tts; "pub");
+        let is_pub = eatKw!(self.tts; "pub");
         match_eat!{ self.tts;
             kw!("fn") => {
                 let name = self.eat_ident();
-                let (args, va) = self.eat_param_list_end();
+                let (args, is_va) = self.eat_param_list_end();
                 let ret_ty = self.eat_opt_ret_ty();
                 self.expect_semi();
-                let detail = ExternItemKind::Func{ name, args, va, ret_ty };
-                Some(ItemWrap{ attrs, pub_, detail })
+                let detail = ExternItemKind::Func{ name, args, is_va, ret_ty };
+                Some(ItemWrap{ attrs, is_pub, detail })
             },
             kw!("static") => {
                 let name = self.eat_ident();
@@ -780,7 +780,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                 };
                 self.expect_semi();
                 let detail = ExternItemKind::Static{ name, ty };
-                Some(ItemWrap{ attrs, pub_, detail })
+                Some(ItemWrap{ attrs, is_pub, detail })
             },
             tok!(_, loc) => {
                 self.err(loc, "Expect `fn` or `static`");
@@ -845,18 +845,15 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Eat and return an element of tuple-like-struct.
     fn eat_struct_tuple_elem(&mut self) -> StructTupleElem<'t> {
         let attrs = self.eat_outer_attrs();
-        let pub_ = match_eat!{ self.tts;
-            kw!("pub", loc) => Some(loc),
-            _ => None,
-        };
+        let is_pub = eatKw!(self.tts; "pub");
         let ty = self.eat_ty(true);
-        StructTupleElem{ attrs, pub_, ty }
+        StructTupleElem{ attrs, is_pub, ty }
     }
 
     /// Eat and return a field of struct with fields.
     fn eat_struct_field(&mut self) -> StructField<'t> {
         let attrs = self.eat_outer_attrs();
-        let pub_ = eatKw!(self.tts; "pub");
+        let is_pub = eatKw!(self.tts; "pub");
         let name = self.eat_ident();
         let ty = match_eat!{ self.tts;
             sym!(":") => self.eat_ty(true),
@@ -865,7 +862,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                 Ty::Error
             },
         };
-        StructField{ attrs, pub_, name, ty }
+        StructField{ attrs, is_pub, name, ty }
     }
 
     /// Eat the tail after `enum`.
@@ -973,20 +970,20 @@ impl<'t, 'e> Parser<'t, 'e> {
     ) -> Option<ItemKind<'t>> {
         match_eat!{ self.tts;
             kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, None, ABI::Normal)),
+                Some(self.eat_fn_tail(attrs, false, ABI::Normal)),
             kw!("extern"), kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, None, ABI::Extern)),
+                Some(self.eat_fn_tail(attrs, false, ABI::Extern)),
             kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
                 Some(self.eat_fn_tail(attrs,
-                                      None,
+                                      false,
                                       ABI::Specific{ loc, abi })),
-            kw!("unsafe", lu), kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Normal)),
-            kw!("unsafe", lu), kw!("extern"), kw!("fn") =>
-                Some(self.eat_fn_tail(attrs, Some(lu), ABI::Extern)),
-            kw!("unsafe", lu), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
+            kw!("unsafe"), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, true, ABI::Normal)),
+            kw!("unsafe"), kw!("extern"), kw!("fn") =>
+                Some(self.eat_fn_tail(attrs, true, ABI::Extern)),
+            kw!("unsafe"), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
                 Some(self.eat_fn_tail(attrs,
-                                      Some(lu),
+                                      true,
                                       ABI::Specific{ loc, abi })),
             _ => None,
         }
@@ -998,7 +995,7 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Warning: Never call it when `is_end()`.
     fn eat_trait_item(&mut self) -> Option<TraitItem<'t>> {
         let mut attrs = self.eat_outer_attrs();
-        let pub_ = eatKw!(self.tts; "pub");
+        let is_pub = eatKw!(self.tts; "pub");
         match_eat!{ self.tts;
             kw!("type") => {
                 let name = self.eat_ident();
@@ -1008,7 +1005,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                 };
                 self.expect_semi();
                 let detail = TraitItemKind::AssocTy{ name, default };
-                Some(ItemWrap{ attrs, pub_, detail })
+                Some(ItemWrap{ attrs, is_pub, detail })
             },
             _ => {
                 match self.eat_fn_item(&mut attrs) {
@@ -1024,11 +1021,11 @@ impl<'t, 'e> Parser<'t, 'e> {
                             sig,
                             default: Some(body),
                         };
-                        Some(ItemWrap{ attrs, pub_, detail })
+                        Some(ItemWrap{ attrs, is_pub, detail })
                     },
                     Some(ItemKind::FuncDecl{ sig }) => {
                         let detail = TraitItemKind::Func{ sig, default: None };
-                        Some(ItemWrap{ attrs, pub_, detail })
+                        Some(ItemWrap{ attrs, is_pub, detail })
                     },
                     Some(_) => unreachable!(), // eat_fn_tail() never return
                                                // others
@@ -1072,7 +1069,7 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Warning: Never call it when `is_end()`.
     fn eat_impl_item(&mut self) -> Option<ImplItem<'t>> {
         let mut attrs = self.eat_outer_attrs();
-        let pub_ = eatKw!(self.tts; "pub");
+        let is_pub = eatKw!(self.tts; "pub");
         match_eat!{ self.tts;
             kw!("type") => {
                 let name = self.eat_ident();
@@ -1085,7 +1082,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                 };
                 self.expect_semi();
                 let detail = ImplItemKind::AssocTy{ name, val: Box::new(val) };
-                Some(ItemWrap{ attrs, pub_, detail })
+                Some(ItemWrap{ attrs, is_pub, detail })
             },
             _ => {
                 match self.eat_fn_item(&mut attrs) {
@@ -1101,13 +1098,13 @@ impl<'t, 'e> Parser<'t, 'e> {
                             sig,
                             body,
                         };
-                        Some(ItemWrap{ attrs, pub_, detail })
+                        Some(ItemWrap{ attrs, is_pub, detail })
                     },
                     Some(ItemKind::FuncDecl{ sig }) => {
                         self.err_prev("Expect the function body");
                         let body = Box::new(Expr::Error);
                         let detail = ImplItemKind::Func{ sig, body };
-                        Some(ItemWrap{ attrs, pub_, detail })
+                        Some(ItemWrap{ attrs, is_pub, detail })
                     },
                     Some(_) => unreachable!(), // eat_fn_tail() never return
                                                // others
@@ -1259,15 +1256,15 @@ impl<'t, 'e> Parser<'t, 'e> {
                 }
             },
             _ => {
-                let ref_ = eatKw!(self.tts; "ref");
-                let mut_ = eatKw!(self.tts; "mut");
-                if ref_.is_some() || mut_.is_some() {
+                let is_ref = eatKw!(self.tts; "ref");
+                let is_mut = eatKw!(self.tts; "mut");
+                if is_ref || is_mut {
                     let name = self.eat_ident();
                     let pat = match_eat!{ self.tts;
                         sym!("@") => Some(Box::new(self.eat_pat())),
                         _ => None,
                     };
-                    Pat::BindLike{ name, ref_, mut_, pat }
+                    Pat::BindLike{ name, is_ref, is_mut, pat }
                 } else {
                     self.eat_pat_pathy()
                 }
@@ -1304,7 +1301,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                     sym!("@") => Some(Box::new(self.eat_pat())),
                     _ => None,
                 };
-                Pat::BindLike{ name, ref_: None, mut_: None, pat }
+                Pat::BindLike{ name, is_ref: false, is_mut: false, pat }
             } else {
                 Pat::Path(name)
             },
@@ -1313,14 +1310,14 @@ impl<'t, 'e> Parser<'t, 'e> {
 
     /// Eat and return a field of pattern on struct with fields.
     fn eat_destruct_field(&mut self) -> DestructField<'t> {
-        let ref_ = eatKw!(self.tts; "ref");
-        let mut_ = eatKw!(self.tts; "mut");
+        let is_ref = eatKw!(self.tts; "ref");
+        let is_mut = eatKw!(self.tts; "mut");
         let name = self.eat_ident();
         let pat = match_eat!{ self.tts;
             sym!(":") => Some(Box::new(self.eat_pat())),
             _ => None,
         };
-        DestructField{ ref_, mut_, name, pat }
+        DestructField{ is_ref, is_mut, name, pat }
     }
 
     /// Eat and return a type. If `accect_traits`, it can accept
@@ -1360,26 +1357,26 @@ impl<'t, 'e> Parser<'t, 'e> {
                     lt!(lt) => Some(lt),
                     _ => None,
                 };
-                let mut_ = eatKw!(self.tts; "mut");
+                let is_mut = eatKw!(self.tts; "mut");
                 let ty = Box::new(self.eat_ty(false));
-                Ty::Ref{ lt, mut_, ty }
+                Ty::Ref{ lt, is_mut, ty }
             },
             sym!("*"), kw!("const") =>
-                Ty::Ptr{ mut_: None, ty: Box::new(self.eat_ty(false)) },
-            sym!("*"), kw!("mut", loc) =>
-                Ty::Ptr{ mut_: Some(loc), ty: Box::new(self.eat_ty(false)) },
+                Ty::Ptr{ is_mut: false, ty: Box::new(self.eat_ty(false)) },
+            sym!("*"), kw!("mut") =>
+                Ty::Ptr{ is_mut: true, ty: Box::new(self.eat_ty(false)) },
             kw!("fn") =>
-                self.eat_func_ty(None, ABI::Normal),
+                self.eat_func_ty(false, ABI::Normal),
             kw!("extern"), kw!("fn") =>
-                self.eat_func_ty(None, ABI::Extern),
+                self.eat_func_ty(false, ABI::Extern),
             kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
-                self.eat_func_ty(None, ABI::Specific{ loc, abi }),
-            kw!("unsafe", lu), kw!("fn") =>
-                self.eat_func_ty(Some(lu), ABI::Normal),
-            kw!("unsafe", lu), kw!("extern"), kw!("fn") =>
-                self.eat_func_ty(Some(lu), ABI::Extern),
-            kw!("unsafe", lu), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
-                self.eat_func_ty(Some(lu), ABI::Specific{ loc, abi }),
+                self.eat_func_ty(false, ABI::Specific{ loc, abi }),
+            kw!("unsafe"), kw!("fn") =>
+                self.eat_func_ty(true, ABI::Normal),
+            kw!("unsafe"), kw!("extern"), kw!("fn") =>
+                self.eat_func_ty(true, ABI::Extern),
+            kw!("unsafe"), kw!("extern"), lit_str!(abi, loc), kw!("fn") =>
+                self.eat_func_ty(true, ABI::Specific{ loc, abi }),
             _ => if accept_traits {
                 let (mut v, tail) = self.eat_many_sep_tail(
                     symbol_type!("+"),
@@ -1466,8 +1463,8 @@ impl<'t, 'e> Parser<'t, 'e> {
     }
 
     /// Eat the tail (after `fn`) and return a function type.
-    fn eat_func_ty(&mut self, unsafe_: OptSym<'t>, abi: ABI<'t>) -> Ty<'t> {
-        let (args, va) = match_eat!{ self.tts;
+    fn eat_func_ty(&mut self, is_unsafe: bool, abi: ABI<'t>) -> Ty<'t> {
+        let (args, va_) = match_eat!{ self.tts;
             tree!(loc, delim: Paren, tts) => {
                 self.new_inner(loc, tts).eat_many_comma_tail_last(
                     |p| match_eat!{ p.tts;
@@ -1478,7 +1475,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                                         , ty: p.eat_ty(true) },
                     },
                     |p| match_eat!{ p.tts;
-                        sym!("...", loc) => Some(loc),
+                        sym!("...") => Some(()),
                         _ => None,
                     },
                     |p| p.is_end(),
@@ -1491,10 +1488,10 @@ impl<'t, 'e> Parser<'t, 'e> {
         };
         let ret_ty = self.eat_opt_ret_ty();
         let fun_ty = FuncTy{
-            unsafe_,
+            is_unsafe,
             abi,
             args,
-            va,
+            is_va: va_.is_some(),
             ret_ty,
         };
         Ty::Func(Box::new(fun_ty))
@@ -1768,13 +1765,13 @@ impl<'t, 'e> Parser<'t, 'e> {
             kw!("unsafe") =>
                 Expr::Unsafe(Box::new(self.eat_block_expr())),
             sym!("|", loc) =>
-                self.eat_lambda_expr_tail(None, loc, false),
+                self.eat_lambda_expr_tail(false, loc, false),
             sym!("||", loc) =>
-                self.eat_lambda_expr_tail(None, &loc[..1], true),
-            kw!("move", lm), sym!("|", loc) =>
-                self.eat_lambda_expr_tail(Some(lm), loc, false),
-            kw!("move", lm), sym!("||", loc) =>
-                self.eat_lambda_expr_tail(Some(lm), &loc[..1], true),
+                self.eat_lambda_expr_tail(false, &loc[..1], true),
+            kw!("move"), sym!("|", loc) =>
+                self.eat_lambda_expr_tail(true, loc, false),
+            kw!("move"), sym!("||", loc) =>
+                self.eat_lambda_expr_tail(true, &loc[..1], true),
             kw!("break", kw_loc), lt!(lt) =>
                 Expr::Break{ label: Some(lt)
                            , kw_loc
@@ -2026,8 +2023,8 @@ impl<'t, 'e> Parser<'t, 'e> {
     /// Eat and return a lambda expression after `[move] |` or `[move] ||`.
     fn eat_lambda_expr_tail(
         &mut self,
-        move_: OptSym<'t>,
-        loc: LocStr<'t>,
+        is_move:   bool,
+        loc:       LocStr<'t>,
         is_closed: bool,
     ) -> Expr<'t> {
         let args = if is_closed {
@@ -2050,7 +2047,7 @@ impl<'t, 'e> Parser<'t, 'e> {
                 Box::new(self.eat_expr(false, true)),
             ),
         };
-        let sig = Box::new(LambdaSig{ move_, loc, args, ret_ty });
+        let sig = Box::new(LambdaSig{ is_move, loc, args, ret_ty });
         Expr::Lambda{ sig, body }
     }
 
