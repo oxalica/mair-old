@@ -27,7 +27,7 @@ pub type Item<'a> = ItemWrap<'a, ItemKind<'a>>;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ItemWrap<'a, T> {
     pub attrs:  Vec<Attr<'a>>,
-    pub pub_:   OptSym<'a>,
+    pub is_pub: bool,
     pub detail: T,
 }
 
@@ -120,7 +120,7 @@ pub type ExternItem<'a> = ItemWrap<'a, ExternItemKind<'a>>;
 pub enum ExternItemKind<'a> {
     Func  { name:   Ident<'a>
           , args:   Vec<FuncParam<'a>>
-          , va:     OptSym<'a>
+          , is_va:  bool
           , ret_ty: Option<Box<Ty<'a>>> },
     Static{ name:  Ident<'a>
           , ty:    Option<Box<Ty<'a>>> }
@@ -151,18 +151,18 @@ pub enum ImplItemKind<'a> {
 /// An element of a tuple-like struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StructTupleElem<'a> {
-    pub attrs: Vec<Attr<'a>>,
-    pub pub_:  OptSym<'a>,
-    pub ty:    Ty<'a>,
+    pub attrs:  Vec<Attr<'a>>,
+    pub is_pub: bool,
+    pub ty:     Ty<'a>,
 }
 
 /// a field of a normal struct or enum variant.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StructField<'a> {
-    pub attrs: Vec<Attr<'a>>,
-    pub pub_:  OptSym<'a>,
-    pub name:  Ident<'a>,
-    pub ty:    Ty<'a>,
+    pub attrs:  Vec<Attr<'a>>,
+    pub is_pub: bool,
+    pub name:   Ident<'a>,
+    pub ty:     Ty<'a>,
 }
 
 /// An variant of an `enum`.
@@ -222,31 +222,31 @@ pub enum Restrict<'a> {
 /// argument names and the function type.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FuncSig<'a> {
-    pub unsafe_: OptSym<'a>,
-    pub abi:     ABI<'a>,
-    pub name:    Ident<'a>,
-    pub templ:   Template<'a>,
-    pub args:    Vec<FuncParam<'a>>,
-    pub va:      OptSym<'a>,
-    pub ret_ty:  Option<Box<Ty<'a>>>,
-    pub whs:     OptWhere<'a>,
+    pub is_unsafe: bool,
+    pub abi:       ABI<'a>,
+    pub name:      Ident<'a>,
+    pub templ:     Template<'a>,
+    pub args:      Vec<FuncParam<'a>>,
+    pub is_va:     bool,
+    pub ret_ty:    Option<Box<Ty<'a>>>,
+    pub whs:       OptWhere<'a>,
 }
 
 /// The signature of a lambda function.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LambdaSig<'a> {
-    pub move_:  OptSym<'a>,
+    pub is_move: bool,
     /// The location of capture list including `|`.
-    pub loc:    LocStr<'a>,
-    pub args:   Vec<FuncParam<'a>>,
-    pub ret_ty: Option<Box<Ty<'a>>>,
+    pub loc:     LocStr<'a>,
+    pub args:    Vec<FuncParam<'a>>,
+    pub ret_ty:  Option<Box<Ty<'a>>>,
 }
 
 /// A parameter of a function.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum FuncParam<'a> {
-    SelfMove{ mut_: OptSym<'a> },
-    SelfRef { mut_: OptSym<'a> },
+    SelfMove{ is_mut: bool },
+    SelfRef { is_mut: bool },
     SelfAs  (Ty<'a>),
     Bind    { pat: Pat<'a>, ty: Box<Ty<'a>> },
 }
@@ -254,11 +254,11 @@ pub enum FuncParam<'a> {
 /// The type of a function.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct FuncTy<'a> {
-    pub unsafe_: OptSym<'a>,
-    pub abi:     ABI<'a>,
-    pub args:    Vec<FuncTyParam<'a>>,
-    pub va:      OptSym<'a>,
-    pub ret_ty:  Option<Box<Ty<'a>>>,
+    pub is_unsafe: bool,
+    pub abi:       ABI<'a>,
+    pub args:      Vec<FuncTyParam<'a>>,
+    pub is_va:     bool,
+    pub ret_ty:    Option<Box<Ty<'a>>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -297,11 +297,11 @@ pub enum Ty<'a> {
     /// A type inside paren.
     Paren  (Box<Ty<'a>>),
     /// Reference.
-    Ref    { lt:   Option<Lifetime<'a>>
-           , mut_: OptSym<'a>
-           , ty:   Box<Ty<'a>> },
+    Ref    { lt:     Option<Lifetime<'a>>
+           , is_mut: bool
+           , ty:     Box<Ty<'a>> },
     /// Pointer.
-    Ptr    { mut_: OptSym<'a>, ty: Box<Ty<'a>> },
+    Ptr    { is_mut: bool, ty: Box<Ty<'a>> },
     /// Slice.
     Slice  (Box<Ty<'a>>),
     /// Array.
@@ -452,10 +452,10 @@ pub enum Pat<'a> {
     /// A pattern with a variable bind. eg. `ref a@Some(_)`
     /// If `pat`, `ret_`, `mut_` are all None, it can be either a
     /// variant of an enum or a bind matching everything, like `None`.
-    BindLike      { name: Ident<'a>
-                  , ref_: OptSym<'a>
-                  , mut_: OptSym<'a>
-                  , pat:  Option<Box<Pat<'a>>> },
+    BindLike      { name:   Ident<'a>
+                  , is_ref: bool
+                  , is_mut: bool
+                  , pat:    Option<Box<Pat<'a>>> },
     /// A path to a variant of unit-like enum or unit struct.
     Path          (Path<'a>),
     /// An literal. eg. `123`
@@ -480,10 +480,10 @@ pub enum Pat<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DestructField<'a> {
-    pub ref_: OptSym<'a>,
-    pub mut_: OptSym<'a>,
-    pub name: Ident<'a>,
-    pub pat:  Option<Box<Pat<'a>>>,
+    pub is_ref: bool,
+    pub is_mut: bool,
+    pub name:   Ident<'a>,
+    pub pat:    Option<Box<Pat<'a>>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -552,7 +552,6 @@ pub enum Literal<'a> {
     Bool     (bool),
 }
 
-pub type OptSym<'a> = Option<LocStr<'a>>;
 pub type Ident<'a> = Result<LocStr<'a>, LocStr<'a>>;
 pub type Lifetime<'a> = &'a str;
 
