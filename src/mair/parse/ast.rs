@@ -37,11 +37,11 @@ pub enum ItemKind<'a> {
     /// `extern` `crate` <name> `;`
     ExternCrate { name: Ident<'a> },
     /// `use <path>::*;`
-    UseAll      { path: Path<'a> },
+    UseAll      { path: UsePath<'a> },
     /// `use <path>::<name> [as <alias>];`
-    UseOne      { path: Path<'a>, name: UseName<'a> },
+    UseOne      { path: UsePath<'a>, name: UseName<'a> },
     /// `use <path>::{<name1> [as <alias1>], ... };`
-    UseSome     { path: Path<'a>, names: Vec<UseName<'a>> },
+    UseSome     { path: UsePath<'a>, names: Vec<UseName<'a>> },
     /// `mod <name>;`
     ExternMod   { name: Ident<'a> },
     /// `mod <name> { <item1> ... }`
@@ -102,6 +102,13 @@ pub enum ItemKind<'a> {
                 , whs:   OptWhere<'a>
                 , items: Vec<ImplItem<'a>> },
     PluginInvoke(PluginInvoke<'a>),
+}
+
+/// A path in `use`.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum UsePath<'a> {
+    Absolute{ comps: Vec<Ident<'a>> },
+    Relative{ supers: usize, comps: Vec<Ident<'a>> },
 }
 
 /// A single name referred in a `use` declaration.

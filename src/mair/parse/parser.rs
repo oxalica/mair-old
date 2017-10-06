@@ -561,31 +561,42 @@ impl<'t, 'e> Parser<'t, 'e> {
 
     /// Eat the tail after `use`.
     fn eat_use_tail(&mut self) -> ItemKind<'t> {
-        let is_absolute = match_eat!{ self.tts;
-            sym!("::") => true,
-            _ => false,
+        let supers = match_eat!{ self.tts;
+            kw!("self"), sym!("::") => Some(0),
+            kw!("super"), sym!("::") => {
+                let mut n = 1;
+                loop {
+                    match_eat!{ self.tts;
+                        kw!("super"), sym!("::") => n += 1,
+                        _ => break,
+                    }
+                }
+                Some(n)
+            },
+            sym!("::") => None,
+            _ => None,
         };
         let mut comps = vec![];
         loop {
             match_eat!{ self.tts;
-                kw!("self", loc), sym!("::") =>
-                    comps.push(PathComp::Self_(loc)),
-                kw!("super", loc), sym!("::") =>
-                    comps.push(PathComp::Super(loc)),
                 ident!(name), sym!("::") =>
-                    comps.push(PathComp::Name{ name: Ok(name), hint: None }),
+                    comps.push(Ok(name)),
                 sym!("::") => {
                     let loc = self.prev_pos();
-                    comps.push(PathComp::Name{ name: Err(loc), hint: None })
+                    comps.push(Err(loc))
                 },
                 _ => break,
             }
         }
-        self.eat_use_names_tail(Path{ is_absolute, comps })
+        let use_path = match supers {
+            Some(supers) => UsePath::Relative{ supers, comps },
+            None         => UsePath::Absolute{ comps },
+        };
+        self.eat_use_names_tail(use_path)
     }
 
     /// Eat the using names and semicolon in item `use`, return the ItemKind.
-    fn eat_use_names_tail(&mut self, path: Path<'t>) -> ItemKind<'t> {
+    fn eat_use_names_tail(&mut self, path: UsePath<'t>) -> ItemKind<'t> {
         match_eat!{ self.tts;
             sym!("*") => {
                 self.expect_semi();
