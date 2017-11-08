@@ -196,7 +196,7 @@ define_keywords! {
 } // define_keywords!
 
 /// The regex match a char(maybe escaped).
-const RESTR_CHAR: &'static str = r#"(?x:
+const RESTR_CHAR: &str = r#"(?x:
     (?P<char_normal>[[:^cntrl:]&&[^\\]])|
     \\(?:
         (?P<char_escape_simple>[\\'"nrt0\n])|
@@ -205,7 +205,7 @@ const RESTR_CHAR: &'static str = r#"(?x:
     )
 )"#;
 
-const RESTR_NUM: &'static str = r#"(?x:
+const RESTR_NUM: &str = r#"(?x:
     (?:
         0b(?P<num_bin>[01_]+)|
         0o(?P<num_oct>[0-7_]+)|
