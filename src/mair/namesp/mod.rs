@@ -2,6 +2,8 @@
 
 mod tree;
 
+pub use self::tree::{PreNameSp, NameSp, NameSpPtr};
+
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum Path<'a> {
     Absolute{ comps: Vec<&'a str> },
