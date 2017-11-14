@@ -40,16 +40,13 @@ enum ResolveState<P, T> {
     Done    (Option<T>),
 }
 
-#[derive(Debug)]
-struct UseNameState<'t, T, V> {
-    as_sub: ResolveState<Path<'t>, *mut Node<'t, T, V>>,
-    as_val: ResolveState<ValPath<'t>, *mut V>,
-}
+type SubResolveState<'t, T, V> = ResolveState<Path<'t>, *mut Node<'t, T, V>>;
+type ValResolveState<'t, V> = ResolveState<ValPath<'t>, *mut V>;
 
 #[derive(Debug)]
-enum UseSpaceState<'t, T, V> {
-    Waiting { path: Path<'t>, visiting: bool },
-    Resolved{ sub: *mut Node<'t, T, V> },
+struct UseNameState<'t, T, V> {
+    as_sub: SubResolveState<'t, T, V>,
+    as_val: ValResolveState<'t, V>,
 }
 
 #[derive(Debug)]
@@ -58,8 +55,11 @@ pub enum ResolveError<'t> {
     NotFound      (&'t str),
     TooManySupers { nth: usize },
     /// Current name resolving is skipped due to a previous error.
-    Skip          { name: &'t str, prev: Box<ResolveError<'t>> },
+    Skip          { name: &'t str, prev: Option<Box<ResolveError<'t>>> },
+    /// The error is already emitted before.
+    Emitted,
 }
+type ResolveRet<'t, T> = Result<T, ResolveError<'t>>;
 
 #[derive(Debug)]
 struct Node<'t, T, V> {
@@ -67,9 +67,10 @@ struct Node<'t, T, V> {
     father:      *mut Node<'t, T, V>,
     /// Sub namespaces. May be `mod`, `struct` or a block.
     subs:        HashMap<&'t str, *mut Node<'t, T, V>>,
+    space_lock:  bool,
     /// Namespaces imported by `use ...::*`. When the namespace is frozen
     /// (`NameSp`), it must all hold `Resolved`.
-    use_spaces:  Vec<UseSpaceState<'t, T, V>>,
+    use_spaces:  Vec<SubResolveState<'t, T, V>>,
     /// Names imported by `use`. When the namespace is frozen (`NameSp`), it
     /// must be empty and all names will be added into `subs` or `values`.
     use_names:   HashMap<&'t str, UseNameState<'t, T, V>>,
@@ -109,7 +110,7 @@ impl<'t, T, V> NameSpMutPtr<'t, T, V> {
     unsafe fn walk_resolve(
         &mut self,
         path: &Path<'t>,
-    ) -> Result<Self, ResolveError<'t>> {
+    ) -> ResolveRet<'t, Self> {
         let mut c = self.clone();
         let comps = match *path {
             Path::Absolute{ ref comps } => {
@@ -125,14 +126,10 @@ impl<'t, T, V> NameSpMutPtr<'t, T, V> {
             },
         };
         for &name in comps.iter() {
-            match c.resolve_sub(name) {
-                Ok(Some(sub)) =>
-                    c = sub,
-                Ok(None) =>
-                    return Err(NotFound(name)),
-                Err(prev) =>
-                    return Err(Skip { name, prev: Box::new(prev) }),
-            }
+            c = c.resolve_sub(name)
+                .map_err(|e| {
+                    ResolveError::Skip { name, prev: Some(Box::new(e)) }
+                })?;
         }
         Ok(c)
     }
@@ -145,11 +142,11 @@ impl<'t, T, V> NameSpMutPtr<'t, T, V> {
             let mut f = |e: Option<ResolveError<'t>>| if let Some(e) = e {
                 errs.push(e)
             };
-            for st in node.use_names.values_mut() {
+            for st in &mut node.use_names.values_mut() {
                 f(self.resolve_use_name_as_sub(st).err());
                 f(self.resolve_use_name_as_val(st).err());
             }
-            for st in node.use_spaces.iter_mut() {
+            for st in &mut node.use_spaces {
                 f(self.resolve_use_space(st).err());
             }
             for &sub in node.subs.values() {
@@ -159,36 +156,97 @@ impl<'t, T, V> NameSpMutPtr<'t, T, V> {
         errs
     }
 
-    /// Resolve a name of sub namespace.
-    unsafe fn resolve_sub(
-        &mut self,
-        name: &'t str,
-    ) -> Result<Option<Self>, ResolveError<'t>> {
+    unsafe fn resolve_sub(&mut self, name: &'t str) -> ResolveRet<'t, Self> {
         match (*self.cur).subs.get(name) {
-            Some(&psub) => Ok(Some(self.move_to(psub))),
+            Some(&psub) => Ok(self.move_to(psub)),
             None => match (*self.cur).use_names.get_mut(name) {
                 Some(st) => self.resolve_use_name_as_sub(st),
-                None => unimplemented!(),
+                None => {
+                    self.with_spaces(|mut sp| {
+                        match sp.resolve_sub(name) {
+                            Err(ResolveError::NotFound(_)) => Ok(None),
+                            ret => ret.map(Some),
+                        }
+                    })?.ok_or_else(|| ResolveError::NotFound(name))
+                },
             },
         }
     }
 
-    unsafe fn resolve_val(
-        self,
-        name: &'t str,
-    ) -> Result<Option<*mut V>, ResolveError<'t>> {
-        // (*self.cur).values.get(name) // 0. current
-        //     .or_else(|| (*self.cur).use_names.get_mut(name) // 1. use name
-        //                     .and_then(|st| self.resolve_use_name_as_val(st)))
-        unimplemented!()
+    unsafe fn resolve_val(&mut self, name: &'t str) -> ResolveRet<'t, *mut V> {
+        match (*self.cur).values.get_mut(name) {
+            Some(v) => Ok(v),
+            None => match (*self.cur).use_names.get_mut(name) {
+                Some(st) => self.resolve_use_name_as_val(st),
+                None => {
+                    self.with_spaces(|mut sp| {
+                        match sp.resolve_val(name) {
+                            Err(ResolveError::NotFound(_)) => Ok(None),
+                            ret => ret.map(Some),
+                        }
+                    })?.ok_or_else(|| ResolveError::NotFound(name))
+                },
+            },
+        }
     }
 
-    unsafe fn resolve_use_name_as_sub<'a>(
+    unsafe fn resolve_use_name_as_sub(
         &mut self,
         st: *mut UseNameState<'t, T, V>, // may not have unique access (cycle)
-    ) -> Result<Option<Self>, ResolveError<'t>> {
+    ) -> ResolveRet<'t, Self> {
         use self::ResolveState::*;
         let (path, visiting): (_, *mut bool) = match (*st).as_sub {
+            Done(None) =>
+                return Err(Emitted),
+            Done(Some(pos)) =>
+                return Ok(self.move_to(pos)),
+            Waiting{ ref path, ref mut visiting } =>
+                (path, visiting),
+        };
+        if *visiting {
+            (*st).as_sub = Done(None);
+            Err(ResolveError::Cycle)
+        } else {
+            *visiting = true;
+            let ret = self.walk_resolve(path);
+            *visiting = false;
+            (*st).as_sub = Done(ret.as_ref().ok().map(|tag| tag.cur));
+            ret
+        }
+    }
+
+    unsafe fn resolve_use_name_as_val(
+        &mut self,
+        st: *mut UseNameState<'t, T, V>, // may not have unique access (cycle)
+    ) -> ResolveRet<'t, *mut V> {
+        use self::ResolveState::*;
+        let (path, visiting): (_, *mut bool) = match (*st).as_val {
+            Done(None) =>
+                return Err(Emitted),
+            Done(Some(pos)) =>
+                return Ok(pos),
+            Waiting{ ref path, ref mut visiting } =>
+                (path, visiting),
+        };
+        if *visiting {
+            (*st).as_val = Done(None);
+            Err(ResolveError::Cycle)
+        } else {
+            *visiting = true;
+            let ret = self.walk_resolve(&path.0)
+                .and_then(|mut ori_ns| ori_ns.resolve_val(path.1));
+            *visiting = false;
+            (*st).as_val = Done(ret.as_ref().ok().cloned());
+            ret
+        }
+    }
+
+    unsafe fn resolve_use_space(
+        &mut self,
+        st: *mut SubResolveState<'t, T, V>,
+    ) -> ResolveRet<'t, Option<Self>> {
+        use self::ResolveState::*;
+        let (path, visiting): (_, *mut bool) = match *st {
             Done(None) =>
                 return Ok(None),
             Done(Some(pos)) =>
@@ -196,53 +254,34 @@ impl<'t, T, V> NameSpMutPtr<'t, T, V> {
             Waiting{ ref path, ref mut visiting } =>
                 (path, visiting),
         };
-        if *visiting {
-            (*st).as_sub = Done(None);
-            Err(ResolveError::Cycle)
-        } else { // TODO: ugly
+        if *visiting { // skip namespaces visiting instead of `Err`
+            Ok(None)
+        } else {
             *visiting = true;
             let ret = self.walk_resolve(path);
             *visiting = false;
-            (*st).as_sub = Done(None);
-            let target = ret?;
-            (*st).as_sub = Done(Some(target.cur));
-            Ok(Some(target))
+            *st = Done(ret.as_ref().ok().map(|tag| tag.cur));
+            ret.map(Some)
         }
     }
 
-    unsafe fn resolve_use_name_as_val<'a>(
+    unsafe fn with_spaces<R, F>(
         &mut self,
-        st: *mut UseNameState<'t, T, V>, // may not have unique access (cycle)
-    ) -> Result<Option<*mut V>, ResolveError<'t>> {
-        use self::ResolveState::*;
-        let (path, visiting): (_, *mut bool) = match (*st).as_val {
-            Done(None) =>
-                return Ok(None),
-            Done(Some(pos)) =>
-                return Ok(Some(pos)),
-            Waiting{ ref path, ref mut visiting } =>
-                (path, visiting),
-        };
-        if *visiting {
-            (*st).as_val = Done(None);
-            Err(ResolveError::Cycle)
-        } else { // TODO: ugly
-            *visiting = true;
-            let ret = self.walk_resolve(&path.0)
-                .and_then(|ori_ns| ori_ns.resolve_val(path.1));
-            *visiting = false;
-            (*st).as_val = Done(None);
-            let opt_ptr = ret?;
-            (*st).as_val = Done(opt_ptr);
-            Ok(opt_ptr)
+        mut f: F,
+    ) -> ResolveRet<'t, Option<R>>
+    where F: FnMut(Self) -> ResolveRet<'t, Option<R>> {
+        (*self.cur).space_lock = true;
+        for st in &mut (*self.cur).use_spaces {
+            if let Some(sp) = self.resolve_use_space(st)? {
+                if !(*sp.cur).space_lock { // `a` use `b::*`, `b` use `a::*`
+                                           // then skip
+                    if let Some(ret) = f(sp)? {
+                        return Ok(Some(ret));
+                    }
+                }
+            }
         }
-    }
-
-    unsafe fn resolve_use_space(
-        &mut self,
-        st: &mut UseSpaceState<'t, T, V>,
-    ) -> Result<(), ResolveError<'t>> {
-        unimplemented!()
+        Ok(None)
     }
 }
 
@@ -264,6 +303,7 @@ impl<'t, T, V> PreNameSp<'t, T, V> {
         let node = Box::new(Node {
             father:      null_mut(),
             subs:        HashMap::new(),
+            space_lock:  false,
             use_spaces:  vec![],
             use_names:   HashMap::new(),
             info,
@@ -291,7 +331,7 @@ impl<'t, T, V> PreNameSp<'t, T, V> {
     /// Add a `use ...::*;` into this namespace.
     pub fn use_space(&mut self, path: Path<'t>) {
         unsafe {
-            let st = UseSpaceState::Waiting { path, visiting: false };
+            let st = ResolveState::Waiting { path, visiting: false };
             (*self.root).use_spaces.push(st);
         }
     }
@@ -317,9 +357,9 @@ impl<'t, T, V> PreNameSp<'t, T, V> {
         }
     }
 
-    /// Consume the namespace builder, resolve all name queries and return a
-    /// frozen namespace structure.
-    pub fn resolve(self) -> (NameSp<'t, T, V>, Vec<ResolveError<'t>>) {
+    /// Consume the namespace builder, resolve all name required by `use`s and
+    /// return a frozen namespace structure.
+    pub fn resolve_uses(self) -> (NameSp<'t, T, V>, Vec<ResolveError<'t>>) {
         unsafe {
             let root = self.root;
             forget(self);
@@ -358,7 +398,7 @@ impl<'a, 't, T, V> NameSpPtr<'a, 't, T, V> {
     }
 
     /// Get the ty(sub) with `name` in this namespace.
-    pub fn get_sub(&self, name: &'t str) -> Option<NameSpPtr<'a, 't, T, V>> {
+    pub fn get_sub(&self, name: &'t str) -> Option<Self> {
         self.cur.subs.get(name)
             .map(|p| unsafe {
                 let cur = p.as_ref().unwrap(); // not null
@@ -371,15 +411,39 @@ impl<'a, 't, T, V> NameSpPtr<'a, 't, T, V> {
     }
 
     /// Get the father namespace (if any).
-    pub fn get_father(&self) -> Option<NameSpPtr<'a, 't, T, V>> {
+    pub fn get_father(&self) -> Option<Self> {
         unsafe {
             self.cur.father.as_ref()
                 .map(|cur| NameSpPtr { root: self.root, cur })
         }
     }
 
-    pub fn walk(&self, path: &Path<'t>) -> NameSpPtr<'a, 't, T, V> {
-        unimplemented!()
+    unsafe fn to_mut_ptr(&self) -> NameSpMutPtr<'t, T, V> {
+        NameSpMutPtr {
+            root: self.root as *const _ as *mut _,
+            cur:  self.cur as *const _ as *mut _,
+        }
+    }
+
+    /// Resolve a path to a sub-namespace (or ty).
+    pub fn resolve_sub(&self, path: &Path<'t>) -> ResolveRet<'t, Self> {
+        unsafe {
+            self.to_mut_ptr()
+                .walk_resolve(path)
+                .map(|NameSpMutPtr { root, cur }| {
+                    NameSpPtr { root: &*root, cur: &*cur }
+                })
+        }
+    }
+
+    /// Resolve a path to a sub-namespace (or ty).
+    pub fn resolve_val(&self, path: &ValPath<'t>) -> ResolveRet<'t, &'a V> {
+        unsafe {
+            self.to_mut_ptr()
+                .walk_resolve(&path.0)
+                .and_then(|mut sp| sp.resolve_val(path.1))
+                .map(|pv| &*pv)
+        }
     }
 }
 
