@@ -3,27 +3,27 @@
 
 use std::collections::hash_map::{HashMap, Iter as HashMapIter};
 use std::cell::{Cell, RefCell};
-use std::marker::PhantomData;
-use std::rc::{Rc, Weak};
+use std::ops::Deref;
 use super::{Path, ValPath};
 use self::ResolveError::*;
 
 /// The mutable namespace tree with unresolved `use`s.
 #[derive(Debug)]
-pub struct PreNameSp<'t, T, V> {
-    root: Rc<NodeCell<'t, T, V>>,
+pub struct PreNameSp<'a, 't: 'a, T: 'a, V: 'a> {
+    root: Box<Node<'a, 't, T, V>>,
 }
 
 /// The immutable namespace tree with all `use`s resolved.
-#[derive(Debug)]
-pub struct NameSp<'t, T, V>(Rc<NodeCell<'t, T, V>>);
+/// It's just a container to store the structure (to extend lifetime).
+/// Methods should be invoked through `NameSpPtr` instead of `NameSp`.
+#[derive(Debug, Default)]
+pub struct NameSp<'a, 't: 'a, T: 'a, V: 'a>(Option<Box<Node<'a, 't, T, V>>>);
 
-/// The pointer to a (sub-)namespace on a namespace tree.
+/// The pointer to a namespace on an immutable namespace tree.
 #[derive(Debug)]
-pub struct NameSpPtr<'a, 't, T: 'a, V: 'a> {
-    root:   Rc<NodeCell<'t, T, V>>,
-    cur:    Rc<NodeCell<'t, T, V>>,
-    marker: PhantomData<&'a NameSp<'a, T, V>>,
+pub struct NameSpPtr<'a, 't: 'a, T: 'a, V: 'a> {
+    root:   &'a Node<'a, 't, T, V>,
+    cur:    &'a Node<'a, 't, T, V>,
 }
 
 #[derive(Debug)]
@@ -33,15 +33,15 @@ enum ResolveState<P, T> {
     Unresolved,
 }
 
-type SubResolveState<'t, T, V> =
-    ResolveState<Path<'t>, Weak<NodeCell<'t, T, V>>>;
-type ValResolveState<'t, V> =
-    ResolveState<ValPath<'t>, Weak<V>>;
+type SubResolveState<'a, 't: 'a, T: 'a, V: 'a> =
+    ResolveState<Path<'t>, &'a Node<'a, 't, T, V>>;
+type ValResolveState<'a, 't: 'a, V: 'a> =
+    ResolveState<ValPath<'t>, &'a V>;
 
 #[derive(Debug)]
-struct UseNameState<'t, T, V> {
-    as_sub: RefCell<SubResolveState<'t, T, V>>,
-    as_val: RefCell<ValResolveState<'t, V>>,
+struct UseNameState<'a, 't: 'a, T: 'a, V: 'a> {
+    as_sub: RefCell<SubResolveState<'a, 't, T, V>>,
+    as_val: RefCell<ValResolveState<'a, 't, V>>,
 }
 
 #[derive(Debug)]
@@ -57,72 +57,69 @@ pub enum ResolveError<'t> {
 type ResolveRet<'t, T> = Result<T, ResolveError<'t>>;
 
 #[derive(Debug)]
-enum OwnOrLink<T> {
-    Owned(Rc<T>),
-    Link (Weak<T>),
+enum OwnOrLink<'a, T: 'a> {
+    Owned(Box<T>),
+    Link (&'a T),
 }
 
-impl<T> OwnOrLink<T> {
-    fn upgrade(&self) -> Rc<T> {
+impl<'a, T: 'a> Deref for OwnOrLink<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
         match *self {
-            OwnOrLink::Owned(ref rc) => Rc::clone(rc),
-            OwnOrLink::Link(ref w) => w.upgrade().unwrap(),
+            OwnOrLink::Owned(ref b) => b,
+            OwnOrLink::Link(r) => r,
         }
     }
 }
 
-type NodeCell<'t, T, V> = RefCell<Node<'t, T, V>>;
-
 #[derive(Debug)]
-struct Node<'t, T, V> {
-    father:     Option<Weak<NodeCell<'t, T, V>>>,
+struct Node<'a, 't: 'a, T: 'a, V: 'a> {
+    father:     Option<&'a Node<'a, 't, T, V>>,
     /// Sub namespaces. May be `mod`, `struct` or a block.
-    subs:       HashMap<&'t str, OwnOrLink<NodeCell<'t, T, V>>>,
+    subs:       HashMap<&'t str, OwnOrLink<'a, Node<'a, 't, T, V>>>,
     space_lock: Cell<bool>,
     /// Namespaces imported by `use ...::*`. When the namespace is frozen
     /// (`NameSp`), it must all hold `Resolved`.
-    use_spaces: Vec<RefCell<SubResolveState<'t, T, V>>>,
+    use_spaces: Vec<RefCell<SubResolveState<'a, 't, T, V>>>,
     /// Names imported by `use`. When the namespace is frozen (`NameSp`), it
     /// must be empty and all names will be added into `subs` or `values`.
-    use_names:  HashMap<&'t str, UseNameState<'t, T, V>>,
+    use_names:  HashMap<&'t str, UseNameState<'a, 't, T, V>>,
     /// Information of this namespace.
     info:       T,
     /// Values in this namespace.
-    values:     HashMap<&'t str, OwnOrLink<V>>,
+    values:     HashMap<&'t str, OwnOrLink<'a, V>>,
 }
 
-impl<'a, 't, T: 'a, V: 'a> Clone for NameSpPtr<'a, 't, T, V> {
+impl<'a, 't: 'a, T: 'a, V: 'a> Clone for NameSpPtr<'a, 't, T, V> {
     fn clone(&self) -> Self {
-        NameSpPtr {
-            root:   Rc::clone(&self.root),
-            cur:    Rc::clone(&self.cur),
-            marker: PhantomData,
-        }
+        NameSpPtr{ root: self.root, cur: self.cur }
     }
 }
 
-impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
-    fn move_to(&self, cell: Rc<NodeCell<'t, T, V>>) -> Self {
-        NameSpPtr {
-            root:   Rc::clone(&self.root),
-            cur:    cell,
-            marker: PhantomData,
-        }
+impl<'a, 't: 'a, T: 'a, V: 'a> NameSp<'a, 't, T, V> {
+    pub fn new() -> Self {
+        NameSp(None)
+    }
+}
+
+impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
+    fn move_to(&self, target: &'a Node<'a, 't, T, V>) -> Self {
+        NameSpPtr { root: self.root, cur: target }
     }
 
     pub fn get_root(&self) -> Self {
-        self.move_to(Rc::clone(&self.root))
+        self.move_to(self.root)
     }
 
     /// The the namespace which owned this namespace (if any).
     pub fn get_father(&self) -> Option<Self> {
-        self.cur.borrow().father
+        self.cur.father
             .as_ref()
-            .map(|w| self.move_to(w.upgrade().unwrap())) // nodes lives in 'a
+            .map(|r| self.move_to(r))
     }
 
     /// Get the custom information `T` of this namespace.
-    pub fn get_info(&self) -> &'a T {
+    pub fn get_info(&self) -> &T {
         unimplemented!()
     }
 
@@ -133,17 +130,16 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
 
     fn resolve_all(&self) -> Vec<ResolveError<'t>> {
         let mut errs = vec![];
-        let node = self.cur.borrow();
-        for st in node.use_names.values() {
+        for st in self.cur.use_names.values() {
             errs.extend(self.resolve_sub_path(&st.as_sub).err());
             errs.extend(self.resolve_val_path(&st.as_val).err());
         }
-        for st in &node.use_spaces {
+        for st in &self.cur.use_spaces {
             errs.extend(self.resolve_sub_path(st).err());
         }
-        for sub in node.subs.values() {
+        for sub in self.cur.subs.values() {
             if let OwnOrLink::Owned(ref child) = *sub {
-                errs.extend(self.move_to(Rc::clone(child)).resolve_all());
+                errs.extend(self.move_to(child).resolve_all());
             }
         }
         errs
@@ -174,9 +170,9 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
     }
 
     fn resolve_sub(&self, name: &'t str) -> ResolveRet<'t, Self> {
-        let node = self.cur.borrow();
+        let node = self.cur;
         match node.subs.get(name) {
-            Some(sub) => Ok(self.move_to(sub.upgrade())),
+            Some(sub) => Ok(self.move_to(sub)),
             None => match node.use_names.get(name) {
                 Some(st) => self.resolve_sub_path(&st.as_sub),
                 None => {
@@ -191,10 +187,10 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         }
     }
 
-    fn resolve_val(&self, name: &'t str) -> ResolveRet<'t, Weak<V>> {
-        let node = self.cur.borrow();
+    fn resolve_val(&self, name: &'t str) -> ResolveRet<'t, &'a V> {
+        let node = self.cur;
         match node.values.get(name) {
-            Some(v) => Ok(Rc::downgrade(&v.upgrade())),
+            Some(v) => Ok(v),
             None => match node.use_names.get(name) {
                 Some(st) => self.resolve_val_path(&st.as_val),
                 None => {
@@ -211,11 +207,11 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
 
     fn resolve_sub_path(
         &self,
-        st: &RefCell<SubResolveState<'t, T, V>>,
+        st: &RefCell<SubResolveState<'a, 't, T, V>>,
     ) -> ResolveRet<'t, Self> {
         use self::ResolveState::*;
         match *st.borrow_mut() {
-            Resolved(ref w) => return Ok(self.move_to(w.upgrade().unwrap())),
+            Resolved(r) => return Ok(self.move_to(r)),
             Unresolved => return Err(ResolveError::Emitted), // ^- alive in 'a
             Waiting{ visiting: true, .. } => return Err(ResolveError::Cycle),
             Waiting{ ref mut visiting, .. } => *visiting = true,
@@ -227,7 +223,7 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         };
         let ret = self.walk_resolve(path);
         *st.borrow_mut() = match ret {
-            Ok(ref sub) => Resolved(Rc::downgrade(&sub.cur)),
+            Ok(ref sub) => Resolved(sub.cur),
             Err(_) => Unresolved,
         };
         ret
@@ -235,11 +231,11 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
 
     fn resolve_val_path(
         &self,
-        st: &RefCell<ValResolveState<'t, V>>,
-    ) -> ResolveRet<'t, Weak<V>> {
+        st: &RefCell<ValResolveState<'a, 't, V>>,
+    ) -> ResolveRet<'t, &'a V> {
         use self::ResolveState::*;
         match *st.borrow_mut() {
-            Resolved(ref w) => return Ok(Weak::clone(w)),
+            Resolved(r) => return Ok(r),
             Unresolved => return Err(ResolveError::Emitted),
             Waiting{ visiting: true, .. } => return Err(ResolveError::Cycle),
             Waiting{ ref mut visiting, .. } => *visiting = true,
@@ -252,7 +248,7 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         let ret = self.walk_resolve(path)
             .and_then(|sub| sub.resolve_val(name));
         *st.borrow_mut() = match ret {
-            Ok(ref w) => Resolved(Weak::clone(w)),
+            Ok(r) => Resolved(r),
             Err(_) => Unresolved,
         };
         ret
@@ -260,12 +256,12 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
 
     fn with_spaces<R, F>(&self, mut f: F) -> ResolveRet<'t, Option<R>>
     where F: FnMut(Self) -> ResolveRet<'t, Option<R>> {
-        let node = self.cur.borrow();
+        let node = self.cur;
         node.space_lock.set(true);
         for st in &node.use_spaces {
             let sub = self.resolve_sub_path(st)?;
             // If `a` use `b::*` and `b` use `a::*`, skip
-            if !sub.cur.borrow().space_lock.get() {
+            if !sub.cur.space_lock.get() {
                 if let Some(ret) = f(sub)? {
                     return Ok(Some(ret));
                 }
@@ -282,16 +278,16 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
 
     /// Resolve a path to a value. It can only be invoked after all `use`s are
     /// resolved.
-    pub fn query_val(&self, path: &ValPath<'t>) -> ResolveRet<'t, Weak<V>> {
+    pub fn query_val(&self, path: &ValPath<'t>) -> ResolveRet<'t, &'a V> {
         self.walk_resolve(&path.0)
             .and_then(|sub| sub.resolve_val(path.1))
     }
 }
 
-impl<'t, T, V> PreNameSp<'t, T, V> {
+impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
     /// Create an empty namespace with custom infomation `T`.
     pub fn new(info: T) -> Self {
-        let node = Node {
+        PreNameSp { root: Box::new(Node {
             father:      None,
             subs:        HashMap::new(),
             space_lock:  Cell::new(false),
@@ -299,18 +295,17 @@ impl<'t, T, V> PreNameSp<'t, T, V> {
             use_names:   HashMap::new(),
             info,
             values:      HashMap::new(),
-        };
-        PreNameSp { root: Rc::new(RefCell::new(node)) }
+        }) }
     }
 
     /// Add a sub-namespace and return the old one with the same name (if any).
     pub fn add_sub(
         &mut self,
         name: &'t str,
-        sub: PreNameSp<'t, T, V>,
-    ) -> Option<PreNameSp<'t, T, V>> {
+        sub: PreNameSp<'a, 't, T, V>,
+    ) -> Option<PreNameSp<'a,'t, T, V>> {
         use self::OwnOrLink::*;
-        self.root.borrow_mut().subs
+        self.root.subs
             .insert(name, Owned(sub.root))
             .map(|old| match old {
                 Owned(rc) => PreNameSp { root: rc },
@@ -320,7 +315,7 @@ impl<'t, T, V> PreNameSp<'t, T, V> {
 
     /// Add a `use ...::*;` into this namespace.
     pub fn use_space(&mut self, path: Path<'t>) {
-        self.root.borrow_mut().use_spaces
+        self.root.use_spaces
             .push(RefCell::new(
                 ResolveState::Waiting { path, visiting: false }
             ));
@@ -344,7 +339,7 @@ impl<'t, T, V> PreNameSp<'t, T, V> {
                 visiting: false,
             }),
         };
-        self.root.borrow_mut().use_names
+        self.root.use_names
             .insert(name, st)
             .map(|st| match st.as_val.into_inner() {
                 Waiting { path, .. } => path,
@@ -354,22 +349,14 @@ impl<'t, T, V> PreNameSp<'t, T, V> {
 
     /// Consume the `PreNameSp`, resolve all name required by `use`s and return
     /// a frozen namespace structure.
-    pub fn resolve_uses(self) -> (NameSp<'t, T, V>, Vec<ResolveError<'t>>) {
-        let errs = (NameSpPtr {
-            root:   Rc::clone(&self.root),
-            cur:    Rc::clone(&self.root),
-            marker: PhantomData,
-        }).resolve_all();
-        (NameSp(self.root), errs)
-    }
-}
-
-impl<'t, T, V> NameSp<'t, T, V> {
-    pub fn root<'a>(&'a self) -> NameSpPtr<'a, 't, T, V> {
-        NameSpPtr {
-            root:   Rc::clone(&self.0),
-            cur:    Rc::clone(&self.0),
-            marker: PhantomData,
-        }
+    pub fn resolve_uses(
+        self,
+        container: &'a mut NameSp<'a, 't, T, V>,
+    ) -> (NameSpPtr<'a, 't, T, V>, Vec<ResolveError<'t>>) {
+        container.0 = Some(self.root);
+        let r = container.0.as_ref().unwrap(); // get reference living in 'a
+        let p = NameSpPtr { root: r, cur: r };
+        let errs = p.resolve_all();
+        (p, errs)
     }
 }
