@@ -88,10 +88,9 @@ struct Node<'t, T, V> {
     /// Information of this namespace.
     info:       T,
     /// Values in this namespace.
-    values:     HashMap<&'t str, Rc<V>>,
+    values:     HashMap<&'t str, OwnOrLink<V>>,
 }
 
-// TODO: `derive(Clone)` cause return type errors (???) but this don't
 impl<'a, 't, T: 'a, V: 'a> Clone for NameSpPtr<'a, 't, T, V> {
     fn clone(&self) -> Self {
         NameSpPtr {
@@ -133,23 +132,18 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
     }
 
     fn resolve_all(&self) -> Vec<ResolveError<'t>> {
-        let node = self.cur.borrow();
         let mut errs = vec![];
-        { // TODO: ugly
-            let mut f = |e: Option<ResolveError<'t>>| if let Some(e) = e {
-                errs.push(e)
-            };
-            for st in node.use_names.values() {
-                f(self.resolve_sub_path(&st.as_sub).err());
-                f(self.resolve_val_path(&st.as_val).err());
-            }
-            for st in &node.use_spaces {
-                f(self.resolve_sub_path(st).err());
-            }
+        let node = self.cur.borrow();
+        for st in node.use_names.values() {
+            errs.extend(self.resolve_sub_path(&st.as_sub).err());
+            errs.extend(self.resolve_val_path(&st.as_val).err());
+        }
+        for st in &node.use_spaces {
+            errs.extend(self.resolve_sub_path(st).err());
         }
         for sub in node.subs.values() {
             if let OwnOrLink::Owned(ref child) = *sub {
-                errs.append(&mut self.move_to(Rc::clone(child)).resolve_all());
+                errs.extend(self.move_to(Rc::clone(child)).resolve_all());
             }
         }
         errs
@@ -200,7 +194,7 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
     fn resolve_val(&self, name: &'t str) -> ResolveRet<'t, Weak<V>> {
         let node = self.cur.borrow();
         match node.values.get(name) {
-            Some(v) => Ok(Rc::downgrade(v)),
+            Some(v) => Ok(Rc::downgrade(&v.upgrade())),
             None => match node.use_names.get(name) {
                 Some(st) => self.resolve_val_path(&st.as_val),
                 None => {
@@ -280,14 +274,17 @@ impl<'a, 't, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         Ok(None)
     }
 
-    /// Resolve a path to a namespace.
+    /// Resolve a path to a namespace. It can only be invoked after all `use`s
+    /// are resolved. So if error occurs, it must be `NotFound`.
     pub fn query_sub(&self, path: &Path<'t>) -> ResolveRet<'t, Self> {
-        unimplemented!()
+        self.walk_resolve(path)
     }
 
-    /// Resolve a path to a value.
-    pub fn query_val(&self, path: &ValPath<'t>) -> ResolveRet<'t, &'a V> {
-        unimplemented!()
+    /// Resolve a path to a value. It can only be invoked after all `use`s are
+    /// resolved.
+    pub fn query_val(&self, path: &ValPath<'t>) -> ResolveRet<'t, Weak<V>> {
+        self.walk_resolve(&path.0)
+            .and_then(|sub| sub.resolve_val(path.1))
     }
 }
 
