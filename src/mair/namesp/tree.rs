@@ -3,7 +3,6 @@
 
 use std::collections::hash_map::{HashMap, Iter as HashMapIter};
 use std::cell::{Cell, RefCell};
-use std::ops::Deref;
 use super::{Path, ValPath};
 use self::ResolveError::*;
 
@@ -57,47 +56,32 @@ pub enum ResolveError<'t> {
 type ResolveRet<'t, T> = Result<T, ResolveError<'t>>;
 
 #[derive(Debug)]
-enum OwnOrLink<'a, T: 'a> {
-    Owned(Box<T>),
-    Link (&'a T),
-}
-
-impl<'a, T: 'a> Deref for OwnOrLink<'a, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        match *self {
-            OwnOrLink::Owned(ref b) => b,
-            OwnOrLink::Link(r) => r,
-        }
-    }
-}
-
-#[derive(Debug)]
 struct Node<'a, 't: 'a, T: 'a, V: 'a> {
     father:     Option<&'a Node<'a, 't, T, V>>,
-    /// Sub namespaces. May be `mod`, `struct` or a block.
-    subs:       HashMap<&'t str, OwnOrLink<'a, Node<'a, 't, T, V>>>,
+    /// Sub namespaces owned by this namespace.
+    subs:       HashMap<&'t str, Box<Node<'a, 't, T, V>>>,
+    /// The flag set when finding names through `use_space`.
     space_lock: Cell<bool>,
     /// Namespaces imported by `use ...::*`. When the namespace is frozen
-    /// (`NameSp`), it must all hold `Resolved`.
+    /// (`NameSp`), it must not hold `Waiting`.
     use_spaces: Vec<RefCell<SubResolveState<'a, 't, T, V>>>,
-    /// Names imported by `use`. When the namespace is frozen (`NameSp`), it
-    /// must be empty and all names will be added into `subs` or `values`.
+    /// Names imported by `use`.  When the namespace is frozen (`NameSp`), it
+    /// must not hold `Waiting`.
     use_names:  HashMap<&'t str, UseNameState<'a, 't, T, V>>,
     /// Information of this namespace.
     info:       T,
-    /// Values in this namespace.
-    values:     HashMap<&'t str, OwnOrLink<'a, V>>,
+    /// Values owned by this namespace.
+    values:     HashMap<&'t str, V>,
 }
 
 #[derive(Debug)]
 pub struct SubIter<'a, 't: 'a, T: 'a, V: 'a> {
     root: &'a Node<'a, 't, T, V>,
-    iter: HashMapIter<'a, &'t str, OwnOrLink<'a, Node<'a, 't, T, V>>>,
+    iter: HashMapIter<'a, &'t str, Box<Node<'a, 't, T, V>>>,
 }
 #[derive(Debug)]
 pub struct ValIter<'a, 't: 'a, V: 'a> {
-    iter: HashMapIter<'a, &'t str, OwnOrLink<'a, V>>,
+    iter: HashMapIter<'a, &'t str, V>,
 }
 
 impl<'a, 't: 'a, T: 'a, V: 'a> Iterator for SubIter<'a, 't, T, V> {
@@ -112,7 +96,7 @@ impl<'a, 't: 'a, V: 'a> Iterator for ValIter<'a, 't, V> {
     type Item = (&'t str, &'a V);
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
-            .map(|(&name, v)| (name, v as &V))
+            .map(|(&name, v)| (name, v))
     }
 }
 
@@ -133,11 +117,12 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         NameSpPtr { root: self.root, cur: target }
     }
 
+    /// Get a pointer to the root namespace.
     pub fn get_root(&self) -> Self {
         self.move_to(self.root)
     }
 
-    /// The the namespace which owned this namespace (if any).
+    /// Get a pointer to the namespace which owned this namespace (if any).
     pub fn get_father(&self) -> Option<Self> {
         self.cur.father
             .as_ref()
@@ -159,6 +144,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         ValIter { iter: self.cur.values.iter() }
     }
 
+    /// DFS to resolve all use names in the sub-tree of this namespace.
     fn resolve_all(&self) -> Vec<ResolveError<'t>> {
         let mut errs = vec![];
         for st in self.cur.use_names.values() {
@@ -169,13 +155,12 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
             errs.extend(self.resolve_sub_path(st).err());
         }
         for sub in self.cur.subs.values() {
-            if let OwnOrLink::Owned(ref child) = *sub {
-                errs.extend(self.move_to(child).resolve_all());
-            }
+            errs.extend(self.move_to(sub).resolve_all());
         }
         errs
     }
 
+    /// Resolve a path from this namespace. (Recursive)
     fn walk_resolve(&self, path: &Path<'t>) -> ResolveRet<'t, Self> {
         let mut c: Self = self.clone();
         let comps = match *path {
@@ -200,6 +185,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         Ok(c)
     }
 
+    /// Resolve a sub-namespace name in this namespace. (Recursive)
     fn resolve_sub(&self, name: &'t str) -> ResolveRet<'t, Self> {
         let node = self.cur;
         match node.subs.get(name) {
@@ -218,6 +204,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         }
     }
 
+    /// Resolve a value name in this namespace. (Recursive)
     fn resolve_val(&self, name: &'t str) -> ResolveRet<'t, &'a V> {
         let node = self.cur;
         match node.values.get(name) {
@@ -236,6 +223,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         }
     }
 
+    /// Resolve a `use`-sub-namespace and store the result. (Recursive)
     fn resolve_sub_path(
         &self,
         st: &RefCell<SubResolveState<'a, 't, T, V>>,
@@ -260,6 +248,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         ret
     }
 
+    /// Resolve a `use`-value and store the result. (Recursive)
     fn resolve_val_path(
         &self,
         st: &RefCell<ValResolveState<'a, 't, V>>,
@@ -285,6 +274,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         ret
     }
 
+    /// Do something with namespaces imported by `use`-space. (Recursive)
     fn with_spaces<R, F>(&self, mut f: F) -> ResolveRet<'t, Option<R>>
     where F: FnMut(Self) -> ResolveRet<'t, Option<R>> {
         let node = self.cur;
@@ -335,13 +325,9 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
         name: &'t str,
         sub: PreNameSp<'a, 't, T, V>,
     ) -> Option<PreNameSp<'a,'t, T, V>> {
-        use self::OwnOrLink::*;
         self.root.subs
-            .insert(name, Owned(sub.root))
-            .map(|old| match old {
-                Owned(rc) => PreNameSp { root: rc },
-                Link(_) => unreachable!(), // no resolutions in `PreNameSp`
-            })
+            .insert(name, sub.root)
+            .map(|root| PreNameSp { root })
     }
 
     /// Add a `use ...::*;` into this namespace.
