@@ -90,6 +90,32 @@ struct Node<'a, 't: 'a, T: 'a, V: 'a> {
     values:     HashMap<&'t str, OwnOrLink<'a, V>>,
 }
 
+#[derive(Debug)]
+pub struct SubIter<'a, 't: 'a, T: 'a, V: 'a> {
+    root: &'a Node<'a, 't, T, V>,
+    iter: HashMapIter<'a, &'t str, OwnOrLink<'a, Node<'a, 't, T, V>>>,
+}
+#[derive(Debug)]
+pub struct ValIter<'a, 't: 'a, V: 'a> {
+    iter: HashMapIter<'a, &'t str, OwnOrLink<'a, V>>,
+}
+
+impl<'a, 't: 'a, T: 'a, V: 'a> Iterator for SubIter<'a, 't, T, V> {
+    type Item = (&'t str, NameSpPtr<'a, 't, T, V>);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
+            .map(|(&name, cur)| (name, NameSpPtr { root: self.root, cur }))
+    }
+}
+
+impl<'a, 't: 'a, V: 'a> Iterator for ValIter<'a, 't, V> {
+    type Item = (&'t str, &'a V);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
+            .map(|(&name, v)| (name, v as &V))
+    }
+}
+
 impl<'a, 't: 'a, T: 'a, V: 'a> Clone for NameSpPtr<'a, 't, T, V> {
     fn clone(&self) -> Self {
         NameSpPtr{ root: self.root, cur: self.cur }
@@ -119,13 +145,18 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
     }
 
     /// Get the custom information `T` of this namespace.
-    pub fn get_info(&self) -> &T {
-        unimplemented!()
+    pub fn get_info(&self) -> &'a T {
+        &self.cur.info
+    }
+
+    /// Get an iterator over all sub-namespaces owned by this namespace.
+    pub fn subs(&self) -> SubIter<'a, 't, T, V> {
+        SubIter { root: self.root, iter: self.cur.subs.iter() }
     }
 
     /// Get an iterator over all values owned by this namespace.
-    pub fn values(&self) -> HashMapIter<'a, &'t str, V> {
-        unimplemented!()
+    pub fn values(&self) -> ValIter<'a, 't, V> {
+        ValIter { iter: self.cur.values.iter() }
     }
 
     fn resolve_all(&self) -> Vec<ResolveError<'t>> {
