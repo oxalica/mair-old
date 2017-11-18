@@ -15,7 +15,7 @@ pub struct PreNameSp<'a, 't: 'a, T: 'a, V: 'a> {
 /// The immutable namespace tree with all `use`s resolved.
 /// It's just a container to store the structure (to extend lifetime).
 /// Methods should be invoked through `NameSpPtr` instead of `NameSp`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NameSp<'a, 't: 'a, T: 'a, V: 'a>(Option<Box<Node<'a, 't, T, V>>>);
 
 /// The pointer to a namespace on an immutable namespace tree.
@@ -109,6 +109,13 @@ impl<'a, 't: 'a, T: 'a, V: 'a> Clone for NameSpPtr<'a, 't, T, V> {
 impl<'a, 't: 'a, T: 'a, V: 'a> NameSp<'a, 't, T, V> {
     pub fn new() -> Self {
         NameSp(None)
+    }
+}
+
+// FIXME: Cannot derive `Default` due to rust-lang/rust#26925
+impl<'a, 't: 'a, T: 'a, V: 'a> Default for NameSp<'a, 't, T, V> {
+    fn default() -> Self {
+        NameSp::new()
     }
 }
 
