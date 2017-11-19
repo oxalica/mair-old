@@ -43,7 +43,7 @@ struct UseNameState<'a, 't: 'a, T: 'a, V: 'a> {
     as_val: RefCell<ValResolveState<'a, 't, V>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ResolveError<'t> {
     Cycle,
     NotFound      (&'t str),
@@ -57,7 +57,7 @@ type ResolveRet<'t, T> = Result<T, ResolveError<'t>>;
 
 #[derive(Debug)]
 struct Node<'a, 't: 'a, T: 'a, V: 'a> {
-    father:     Option<&'a Node<'a, 't, T, V>>,
+    father:     Cell<Option<&'a Node<'a, 't, T, V>>>,
     /// Sub namespaces owned by this namespace.
     subs:       HashMap<&'t str, Box<Node<'a, 't, T, V>>>,
     /// The flag set when finding names through `use_space`.
@@ -106,6 +106,14 @@ impl<'a, 't: 'a, T: 'a, V: 'a> Clone for NameSpPtr<'a, 't, T, V> {
     }
 }
 
+impl<'a, 't: 'a, T: 'a, V: 'a> PartialEq for NameSpPtr<'a, 't, T, V> {
+    fn eq(&self, rhs: &Self) -> bool {
+        self.cur as *const _ == rhs.cur
+    }
+}
+
+impl<'a, 't: 'a, T: 'a, V: 'a> Eq for NameSpPtr<'a, 't, T, V> {}
+
 impl<'a, 't: 'a, T: 'a, V: 'a> NameSp<'a, 't, T, V> {
     pub fn new() -> Self {
         NameSp(None)
@@ -132,6 +140,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
     /// Get a pointer to the namespace which owned this namespace (if any).
     pub fn get_father(&self) -> Option<Self> {
         self.cur.father
+            .get()
             .as_ref()
             .map(|r| self.move_to(r))
     }
@@ -149,6 +158,14 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
     /// Get an iterator over all values owned by this namespace.
     pub fn values(&self) -> ValIter<'a, 't, V> {
         ValIter { iter: self.cur.values.iter() }
+    }
+
+    /// DFS to set all `father` fields of the namespace tree.
+    fn set_fathers(&self) {
+        for (_, sub) in self.subs() {
+            sub.cur.father.set(Some(self.cur));
+            sub.set_fathers();
+        }
     }
 
     /// DFS to resolve all use names in the sub-tree of this namespace.
@@ -238,16 +255,14 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
         use self::ResolveState::*;
         match *st.borrow_mut() {
             Resolved(r) => return Ok(self.move_to(r)),
-            Unresolved => return Err(ResolveError::Emitted), // ^- alive in 'a
+            Unresolved => return Err(ResolveError::Emitted),
             Waiting{ visiting: true, .. } => return Err(ResolveError::Cycle),
             Waiting{ ref mut visiting, .. } => *visiting = true,
         }
-        let _elder = st.borrow(); // make it live longer than `path` below
-        let path = match *_elder {
-            Waiting{ ref path, .. } => path,
+        let ret = match *st.borrow() {
+            Waiting{ ref path, .. } => self.walk_resolve(path),
             _ => unreachable!(), // checked before
         };
-        let ret = self.walk_resolve(path);
         *st.borrow_mut() = match ret {
             Ok(ref sub) => Resolved(sub.cur),
             Err(_) => Unresolved,
@@ -267,13 +282,12 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
             Waiting{ visiting: true, .. } => return Err(ResolveError::Cycle),
             Waiting{ ref mut visiting, .. } => *visiting = true,
         }
-        let _elder = st.borrow(); // make it live longer than `path` below
-        let (path, name) = match *_elder {
-            Waiting{ ref path, .. } => (&path.0, path.1),
+        let ret = match *st.borrow() {
+            Waiting{ ref path, .. } =>
+                self.walk_resolve(&path.0)
+                    .and_then(|sub| sub.resolve_val(path.1)),
             _ => unreachable!(), // checked before
         };
-        let ret = self.walk_resolve(path)
-            .and_then(|sub| sub.resolve_val(name));
         *st.borrow_mut() = match ret {
             Ok(r) => Resolved(r),
             Err(_) => Unresolved,
@@ -316,7 +330,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
     /// Create an empty namespace with custom infomation `T`.
     pub fn new(info: T) -> Self {
         PreNameSp { root: Box::new(Node {
-            father:      None,
+            father:      Cell::new(None),
             subs:        HashMap::new(),
             space_lock:  Cell::new(false),
             use_spaces:  vec![],
@@ -337,6 +351,12 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
             .map(|root| PreNameSp { root })
     }
 
+    /// Add a value and return the old one with the same name (if any).
+    pub fn add_value(&mut self, name: &'t str, value: V) -> Option<V> {
+        self.root.values
+            .insert(name, value)
+    }
+
     /// Add a `use ...::*;` into this namespace.
     pub fn use_space(&mut self, path: Path<'t>) {
         self.root.use_spaces
@@ -349,13 +369,14 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
     /// the same name (if any).
     pub fn use_name(
         &mut self,
+        name: &'t str,
         path: ValPath<'t>,
     ) -> Option<ValPath<'t>> {
         use self::ResolveState::*;
-        let name = path.1;
+        let sub_path = path.0.clone().push(path.1);
         let st = UseNameState {
             as_sub: RefCell::new(Waiting {
-                path: path.0.clone(),
+                path: sub_path,
                 visiting: false,
             }),
             as_val: RefCell::new(Waiting {
@@ -380,6 +401,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
         container.0 = Some(self.root);
         let r = container.0.as_ref().unwrap(); // get reference living in 'a
         let p = NameSpPtr { root: r, cur: r };
+        p.set_fathers();
         let errs = p.resolve_all();
         (p, errs)
     }

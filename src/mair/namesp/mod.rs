@@ -14,7 +14,7 @@ type ValPath<'a> = (Path<'a>, &'a str);
 
 impl<'a> Path<'a> {
     /// Split out the last component.
-    pub fn snoc(self) -> Result<ValPath<'a>, Self> {
+    pub fn pop(self) -> Result<ValPath<'a>, Self> {
         match self {
             Path::Absolute{ mut comps } => match comps.pop() {
                 Some(last) => Ok((Path::Absolute { comps }, last)),
@@ -24,6 +24,20 @@ impl<'a> Path<'a> {
                 Some(last) => Ok((Path::Relative { supers, comps }, last)),
                 None => Err(Path::Relative { supers, comps }),
             }
+        }
+    }
+
+    /// Push a component to the end of path.
+    pub fn push(self, comp: &'a str) -> Self {
+        match self {
+            Path::Absolute{ mut comps } => {
+                comps.push(comp);
+                Path::Absolute { comps }
+            },
+            Path::Relative{ supers, mut comps } => {
+                comps.push(comp);
+                Path::Relative{ supers, comps }
+            },
         }
     }
 }
