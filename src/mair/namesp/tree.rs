@@ -1,10 +1,13 @@
-/// The namespace tree structure storing named ty (sub-namespace) and value
-/// objects, providing name resolution.
+//! The namespace tree structure storing named ty (sub-namespace) and value
+//! objects, providing name resolution.
+
+// FIXME: macro catch_into! requires feature(catch_expr)
+#![cfg_attr(feature="clippy", allow(redundant_closure_call))]
 
 use std::collections::hash_map::{HashMap, Iter as HashMapIter};
 use std::cell::{Cell, RefCell};
 use super::{Path, ValPath};
-use self::ResolveError::*;
+use self::ResolveErrorKind::*;
 
 /// The mutable namespace tree with unresolved `use`s.
 #[derive(Debug)]
@@ -26,26 +29,34 @@ pub struct NameSpPtr<'a, 't: 'a, T: 'a, V: 'a> {
 }
 
 #[derive(Debug)]
-enum ResolveState<'t, P, T> {
-    Waiting   { path: P },
+enum ResolveState<P, T> {
+    Waiting   (P),
     Resolved  (T),
-    Unresolved(Option<ResolveError<'t>>),
+    Unresolved,
 }
 
-impl<'t, P, T> ResolveState<'t, P, T> {
-    fn take_err(&mut self) -> Option<ResolveError<'t>> {
+impl<P, T: Clone> ResolveState<P, T> {
+    fn do_resolve<F>(&mut self, f: F) -> Option<T>
+    where F: FnOnce(P) -> Option<T> {
         use self::ResolveState::*;
-        match *self {
-            Unresolved(ref mut err) => err.take(),
-            _ => None
-        }
+        use std::mem::replace;
+        let (ret, new_st) = match replace(self, Unresolved) {
+            Resolved(t) => (Some(t.clone()), Resolved(t)),
+            Unresolved => (None, Unresolved),
+            Waiting(p) => match f(p) {
+                Some(t) => (Some(t.clone()), Resolved(t)),
+                None => (None, Unresolved),
+            },
+        };
+        *self = new_st;
+        ret
     }
 }
 
 type SubResolveState<'a, 't: 'a, T: 'a, V: 'a> =
-    ResolveState<'t, Path<'t>, NameSpPtr<'a, 't, T, V>>;
+    ResolveState<Path<'t>, NameSpPtr<'a, 't, T, V>>;
 type ValResolveState<'a, 't: 'a, V: 'a> =
-    ResolveState<'t, ValPath<'t>, &'a V>;
+    ResolveState<ValPath<'t>, &'a V>;
 
 #[derive(Debug)]
 struct UseNameState<'a, 't: 'a, T: 'a, V: 'a> {
@@ -54,15 +65,31 @@ struct UseNameState<'a, 't: 'a, T: 'a, V: 'a> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum ResolveError<'t> {
-    Cycle, // TODO: never use
-    NotFound      { name: &'t str },
-    TooManySupers { nth: usize },
-    Ambiguous     { sp_names: Vec<&'t str> },
+pub struct ResolveError<'t> {
+    pos:  &'t str,
+    kind: ResolveErrorKind<'t>,
+}
+type Errs<'t> = Vec<ResolveError<'t>>;
+
+macro_rules! catch_into {
+    ($v:expr; $($t:tt)*) => {
+        (|| { $($t)* })()
+            .map(Some)
+            .unwrap_or_else(|e| {
+                $v.push(e);
+                None
+            })
+    };
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ResolveErrorKind<'t> {
+    Cycle,
+    NotFound,
+    TooManySupers,
     /// Current name resolving is skipped due to a previous error.
-    Skip          { name: &'t str, prev: Option<Box<ResolveError<'t>>> },
-    /// The error is already emitted before.
-    Emitted,
+    Skip,
+    Ambiguous     { sp_names: Vec<&'t str> },
 }
 type ResolveRet<'t, T> = Result<T, ResolveError<'t>>;
 
@@ -180,165 +207,170 @@ impl<'a, 't: 'a, T: 'a, V: 'a> NameSpPtr<'a, 't, T, V> {
     }
 
     /// DFS to resolve all use names in the sub-tree of this namespace.
-    fn resolve_all(&self) -> Vec<ResolveError<'t>> {
-        let mut errs = vec![];
+    fn resolve_all(&self, errs: &mut Errs<'t>) {
         for st in self.cur.use_names.values() {
-            self.resolve_sub_path(&st.as_sub);
-            self.resolve_val_path(&st.as_val);
-            if let (Some(e), Some(_)) =
-                   (st.as_sub.borrow_mut().take_err(),
-                    st.as_val.borrow_mut().take_err()) {
-                errs.push(e); // report once
-                // errs.push(e2);
-            }
+            self.resolve_sub_path(&mut st.as_sub.borrow_mut(), errs);
+            self.resolve_val_path(&mut st.as_val.borrow_mut(), errs);
         }
         for &(_, ref st) in &self.cur.use_spaces {
-            self.resolve_sub_path(st);
-            if let Some(e) = st.borrow_mut().take_err() {
-                errs.push(e);
-            }
+            self.resolve_sub_path(&mut st.borrow_mut(), errs);
         }
         for sub in self.cur.subs.values() {
-            errs.extend(self.move_to(sub).resolve_all());
+            self.move_to(sub).resolve_all(errs);
         }
-        errs
     }
 
     /// Resolve a path from this namespace. (Recursive)
-    fn walk_resolve(&self, path: &Path<'t>) -> ResolveRet<'t, Self> {
-        let mut c: Self = self.clone();
-        let comps = match *path {
-            Path::Absolute{ ref comps } => {
-                c = c.get_root();
-                comps
-            },
-            Path::Relative{ supers, ref comps } => {
-                for nth in 0..supers {
-                    c = c.get_father() // None in the root namespace
-                        .ok_or(TooManySupers { nth })?;
-                }
-                comps
-            },
-        };
-        for &name in comps.iter() {
-            c = c.resolve_sub(name)
-                .map_err(|e| {
-                    ResolveError::Skip { name, prev: Some(Box::new(e)) }
-                })?;
+    fn walk_resolve(
+        &self,
+        path: &Path<'t>,
+        errs: &mut Errs<'t>,
+    ) -> Option<Self> {
+        catch_into! { errs;
+            let mut c: Self = self.clone();
+            let comps = match *path {
+                Path::Absolute{ ref comps } => {
+                    c = c.get_root();
+                    comps
+                },
+                Path::Relative{ ref supers, ref comps } => {
+                    for pos in supers {
+                        c = c.get_father() // None in the root namespace
+                            .ok_or(ResolveError { pos, kind: TooManySupers })?;
+                    }
+                    comps
+                },
+            };
+            for &name in comps.iter() {
+                c = c.resolve_sub(name, errs)
+                    .ok_or(ResolveError { pos: name, kind: Skip })?;
+            }
+            Ok(c)
         }
-        Ok(c)
     }
 
     /// Resolve a sub-namespace name in this namespace. (Recursive)
-    fn resolve_sub(&self, name: &'t str) -> ResolveRet<'t, Self> {
-        self.cur.subs.get(name).map(|sub| self.move_to(sub))
+    /// Return None if `NotFound`, without pushing it to `errs`.
+    fn resolve_sub(&self, name: &'t str, errs: &mut Errs<'t>) -> Option<Self> {
+        None.or_else(|| {
+                self.cur.subs.get(name)
+                    .map(|sub| self.move_to(sub))
+            })
             .or_else(|| {
                 self.cur.use_names.get(name)
-                    .and_then(|st| self.resolve_sub_path(&st.as_sub))
+                    .and_then(|st| catch_into! { errs;
+                        st.as_sub.try_borrow_mut()
+                            .map_err(|_| ResolveError { pos:  name
+                                                      , kind: Cycle })
+                    })
+                    .and_then(|mut st| self.resolve_sub_path(&mut st, errs))
             })
-            .map(Ok)
-            .or_else(|| self.resolve_in_spaces(|sp| sp.resolve_sub(name)))
-            .unwrap_or_else(|| Err(ResolveError::NotFound { name }))
+            .or_else(|| {
+                self.resolve_in_spaces(name, errs, |sp: Self, errs| {
+                    sp.resolve_sub(name, errs)
+                })
+            })
     }
 
     /// Resolve a value name in this namespace. (Recursive)
-    fn resolve_val(&self, name: &'t str) -> ResolveRet<'t, &'a V> {
-        self.cur.values.get(name)
+    /// Return None if `NotFound`, without pushing it to `errs`.
+    fn resolve_val(
+        &self,
+        name: &'t str,
+        errs: &mut Errs<'t>,
+    ) -> Option<&'a V> {
+        None.or_else(|| {
+                self.cur.subs.get(name)
+                    .map(|sub| self.move_to(sub))
+                    .and_then(|sub| sub.resolve_val(name, errs))
+            })
             .or_else(|| {
                 self.cur.use_names.get(name)
-                    .and_then(|st| self.resolve_val_path(&st.as_val))
+                    .and_then(|st| catch_into! { errs;
+                        st.as_sub.try_borrow_mut()
+                            .map_err(|_| ResolveError { pos:  name
+                                                      , kind: Cycle })
+                    })
+                    .and_then(|mut st| self.resolve_sub_path(&mut st, errs))
+                    .and_then(|sub| sub.resolve_val(name, errs))
             })
-            .map(Ok)
-            .or_else(|| self.resolve_in_spaces(|sp| sp.resolve_val(name)))
-            .unwrap_or_else(|| Err(ResolveError::NotFound { name }))
+            .or_else(|| {
+                self.resolve_in_spaces(name, errs, |sp: Self, errs| {
+                    sp.resolve_sub(name, errs)
+                        .and_then(|sub| sub.resolve_val(name, errs))
+                })
+            })
     }
 
     /// Resolve a `use`-sub-namespace and store the result. (Recursive)
     fn resolve_sub_path(
         &self,
-        st: &RefCell<SubResolveState<'a, 't, T, V>>,
+        st:   &mut SubResolveState<'a, 't, T, V>,
+        errs: &mut Errs<'t>,
     ) -> Option<Self> {
-        use self::ResolveState::*;
-        let (new_st, ret) = match st.try_borrow_mut() {
-            Err(_) => return None, // Cycle
-            Ok(st) => match *st {
-                Resolved(ref ptr) => return Some(ptr.clone()),
-                Unresolved(_) => return None,
-                Waiting{ ref path } => match self.walk_resolve(path) {
-                    Ok(sub) => (Resolved(sub.clone()), Some(sub)),
-                    Err(e) => (Unresolved(Some(e)), None),
-                },
-            },
-        };
-        *st.borrow_mut() = new_st;
-        ret
+        st.do_resolve(|path| self.walk_resolve(&path, errs))
     }
 
     /// Resolve a `use`-value and store the result. (Recursive)
     fn resolve_val_path(
         &self,
-        st: &RefCell<ValResolveState<'a, 't, V>>,
+        st:   &mut ValResolveState<'a, 't, V>,
+        errs: &mut Errs<'t>,
     ) -> Option<&'a V> {
-        use self::ResolveState::*;
-        let (new_st, ret) = match st.try_borrow_mut() {
-            Err(_) => return None, // Cycle
-            Ok(st) => match *st {
-                Resolved(v) => return Some(v),
-                Unresolved(_) => return None,
-                Waiting{ ref path } => {
-                    match self.walk_resolve(&path.0)
-                            .and_then(|sub| sub.resolve_val(path.1)) {
-                        Ok(v) => (Resolved(v), Some(v)),
-                        Err(e) => (Unresolved(Some(e)), None),
-                    }
-                },
-            },
-        };
-        *st.borrow_mut() = new_st;
-        ret
+        st.do_resolve(|(path, name)| {
+            self.walk_resolve(&path, errs)
+                .and_then(|sub| sub.resolve_val(name, errs))
+        })
     }
 
     /// Resolve a name in namespaces imported by `use`-space. (Recursive)
-    fn resolve_in_spaces<R, F>(&self, mut f: F) -> Option<ResolveRet<'t, R>>
-    where F: FnMut(Self) -> ResolveRet<'t, R> {
-        use self::ResolveError::*;
-        let mut found = None;
-        let mut sp_names = vec![];
+    fn resolve_in_spaces<R, F>(
+        &self,
+        name:  &'t str,
+        errs:  &mut Errs<'t>,
+        mut f: F,
+    ) -> Option<R>
+    where F: FnMut(Self, &mut Errs<'t>) -> Option<R> {
         self.cur.space_lock.set(true);
-        for &(sp_name, ref st) in &self.cur.use_spaces {
-            if let Some(sub) = self.resolve_sub_path(st) {
-                // If `a` use `b::*` and `b` use `a::*`, skip
-                if !sub.cur.space_lock.get() {
-                    match f(sub) {
-                        Ok(r) => {
-                            found = Some(r);
-                            sp_names.push(sp_name);
-                        },
-                        Err(NotFound{ .. }) => (),
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
-            }
-        }
+        let (sp_names, mut founds): (Vec<_>, Vec<_>) =
+            self.cur.use_spaces.iter()
+                .filter_map(|&(sp_name, ref st)| {
+                    st.try_borrow_mut().ok()
+                        .and_then(|mut st| self.resolve_sub_path(&mut st, errs))
+                        .and_then(|sub| {
+                            if !sub.cur.space_lock.get() {
+                                f(sub, errs)
+                                    .map(|r| (sp_name, r))
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .unzip();
         self.cur.space_lock.set(false);
-        match sp_names.len() {
+        match founds.len() {
             0 => None,
-            1 => Some(Ok(found.unwrap())),
-            _ => Some(Err(Ambiguous{ sp_names })),
+            1 => Some(founds.pop().unwrap()),
+            _ => {
+                errs.push(ResolveError {
+                    pos: name,
+                    kind: Ambiguous { sp_names },
+                });
+                None
+            },
         }
     }
 
     /// Resolve a path to a namespace. It can only be invoked after all `use`s
     /// are resolved. So if error occurs, it must be `NotFound`.
     pub fn query_sub(&self, path: &Path<'t>) -> ResolveRet<'t, Self> {
-        self.walk_resolve(path)
+        unimplemented!()
     }
 
     /// Resolve a path to a value. It can only be invoked after all `use`s are
     /// resolved.
     pub fn query_val(&self, path: &ValPath<'t>) -> ResolveRet<'t, &'a V> {
-        self.walk_resolve(&path.0)
-            .and_then(|sub| sub.resolve_val(path.1))
+        unimplemented!()
     }
 }
 
@@ -377,7 +409,7 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
     /// in error reporting.
     pub fn use_space(&mut self, name: &'t str, path: Path<'t>) {
         self.root.use_spaces
-            .push((name, RefCell::new(ResolveState::Waiting { path })));
+            .push((name, RefCell::new(ResolveState::Waiting(path))));
     }
 
     /// Add a `use ... as ...;` into this namespace and return the old one with
@@ -390,13 +422,13 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
         use self::ResolveState::*;
         let sub_path = path.0.clone().push(path.1);
         let st = UseNameState {
-            as_sub: RefCell::new(Waiting { path: sub_path }),
-            as_val: RefCell::new(Waiting { path }),
+            as_sub: RefCell::new(Waiting(sub_path)),
+            as_val: RefCell::new(Waiting(path)),
         };
         self.root.use_names
             .insert(name, st)
             .map(|st| match st.as_val.into_inner() {
-                Waiting { path, .. } => path,
+                Waiting(path) => path,
                 _ => unreachable!(), // no resolutions in `PreNameSp`
             })
     }
@@ -411,7 +443,8 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
         let r = container.0.as_ref().unwrap(); // get reference living in 'a
         let p = NameSpPtr { root: r, cur: r };
         p.set_fathers();
-        let errs = p.resolve_all();
+        let mut errs = vec![];
+        p.resolve_all(&mut errs);
         (p, errs)
     }
 }
