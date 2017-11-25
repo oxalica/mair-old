@@ -7,7 +7,7 @@ pub use self::tree::{PreNameSp, NameSp, NameSpPtr};
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum Path<'a> {
     Absolute{ comps: Vec<&'a str> },
-    Relative{ supers: usize, comps: Vec<&'a str> },
+    Relative{ supers: Vec<&'a str>, comps: Vec<&'a str> },
 }
 
 type ValPath<'a> = (Path<'a>, &'a str);
