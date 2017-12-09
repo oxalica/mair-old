@@ -105,7 +105,7 @@ pub enum ItemKind<'a> {
 }
 
 /// A path in `use`.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum UsePath<'a> {
     Absolute{ comps: Vec<Ident<'a>> },
     Relative{ supers: usize, comps: Vec<Ident<'a>> },
