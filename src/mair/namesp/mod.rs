@@ -1,5 +1,6 @@
 /// The tree structure of global namespaces and local scopes.
 
+mod run_once;
 mod tree;
 
 pub use self::tree::{PreNameSp, NameSp, NameSpPtr};
