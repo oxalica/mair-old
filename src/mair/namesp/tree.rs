@@ -562,3 +562,202 @@ impl<'a, 't: 'a, T: 'a, V: 'a> PreNameSp<'a, 't, T, V> {
 fn str_eqeqeq(a: &str, b: &str) -> bool {
     a.as_ptr() == b.as_ptr() && a.len() == b.len()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type PreSp<'a, 't> = PreNameSp<'a, 't, &'static str, i32>;
+    type Sp<'a, 't> = NameSp<'a, 't, &'static str, i32>;
+
+    macro_rules! path {
+        (($($sup:tt).*).$($comp:tt).*) => {
+            Path::Relative{ supers: vec![$($sup),*], comps: vec![$($comp),*] }
+        };
+        ($($comp:tt).*) => {
+            Path::Absolute{ comps: vec![$($comp),*] }
+        };
+    }
+
+    macro_rules! valpath {
+        ($($t:tt)*) => { path!($($t)*).pop().unwrap() };
+    }
+
+    macro_rules! ns {
+        (@$pre:ident) => {};
+        (@$pre:ident use [$($p:tt)*] as $name:tt; $($t:tt)*) => {
+            $pre.use_name($name, path!($($p)*).pop().unwrap());
+            ns!(@$pre $($t)*);
+        };
+        (@$pre:ident useall $name:tt [$($p:tt)*]; $($t:tt)*) => {
+            $pre.use_space($name, path!($($p)*));
+            ns!(@$pre $($t)*);
+        };
+        (@$pre:ident $name:tt : ns! { $($sub:tt)* }; $($t:tt)*) => {
+            $pre.add_sub($name, ns!($($sub)*));
+            ns!(@$pre $($t)*);
+        };
+        (@$pre:ident $name:tt : $e:expr; $($t:tt)*) => {
+            $pre.add_value($name, $e);
+            ns!(@$pre $($t)*);
+        };
+        (<$info:tt> $($t:tt)*) => {{
+            let mut pre = PreSp::new($info);
+            ns!(@pre $($t)*);
+            pre
+        }};
+    }
+
+    fn sort_errs<'t>(
+        s: &str,
+        v: Vec<ResolveError<'t>>,
+    ) -> Vec<(&'t str, isize, ResolveError<'t>)> {
+        use std::mem::discriminant;
+        use std::hash::{Hash, Hasher};
+        use parse::str_ptr_diff;
+        let mut v = v.into_iter()
+            .map(|e| {
+                let pos = e.get_pos();
+                (pos, str_ptr_diff(pos, s), e)
+            })
+            .collect::<Vec<_>>();
+        v.sort_unstable_by_key(|&(_, ipos, ref k)| {
+            use std::collections::hash_map::DefaultHasher;
+            let mut h = DefaultHasher::new();
+            discriminant(k).hash(&mut h);
+            (h.finish(), ipos)
+        });
+        v
+    }
+
+    #[test]
+    fn basic_test() {
+        let mut sp = Sp::new(); // should live longer than `PreNameSp`
+        let pre = ns! { <"root">
+            useall "useall 1" ["b"];
+            use ["a"] as "b";
+            "a": ns! { <"mod a">
+                "b": 2;
+                "c": 3;
+            };
+            "c": 1;
+        };
+        let (root, errs) = pre.resolve_uses(&mut sp);
+        assert_eq!(errs, vec![]);
+        assert_eq!(root.get_root(), root);
+        assert_eq!(root.get_father(), None);
+        assert_eq!(root.get_info(), &"root");
+
+        let a1 = root.query_sub(&path!("a")).unwrap();
+        let a2 = root.query_sub(&path!(()."b")).unwrap();
+        let a3 = a1.query_sub(&path!(("sup1")."a")).unwrap();
+        assert_eq!(root.query_sub(&path!("c")),
+                   Err(NotFound { name: "c" }));
+        assert_eq!(a1, a2);
+        assert_eq!(a1, a3);
+        assert_eq!(a1.get_root(), root);
+        assert_eq!(a1.get_father(), Some(root));
+        assert_eq!(a1.get_info(), &"mod a");
+
+        assert_eq!(root.subs().collect::<Vec<_>>(), vec![("a", a1)]);
+        assert_eq!(root.values().collect::<Vec<_>>(), vec![("c", &1)]);
+
+        assert_eq!(root.query_val(&valpath!("b")), Ok(&2));
+        assert_eq!(root.query_val(&valpath!("c")), Ok(&1));
+        assert_eq!(root.query_val(&valpath!("a")),
+                   Err(NotFound { name: "a" }));
+        assert_eq!(a1.query_val(&valpath!("c")), Ok(&1));
+        assert_eq!(a1.query_val(&valpath!(()."c")), Ok(&3));
+        assert_eq!(a1.query_val(&valpath!(("sup1")."c")), Ok(&1));
+        assert_eq!(a1.query_val(&valpath!(("sup1")."a"."x")),
+                   Err(NotFound { name: "x" }));
+        assert_eq!(a1.query_val(&valpath!(("sup1")."a"."x"."y")),
+                   Err(NotFound { name: "x" }));
+        assert_eq!(a1.query_val(&valpath!(("sup1"."sup2")."c")),
+                   Err(TooManySupers { super_pos: "sup2" }));
+    }
+
+    #[test]
+    fn useall_cycle_test() {
+        let mut sp = Sp::new();
+        let pre = ns! { <"root">
+            useall "useall 1" ["a"];
+            useall "useall 2" ["b"];
+            "a": ns! { <"mod a">
+                "x": 1;
+                "x": ns! { <"mod x">
+                    "a": 3;
+                };
+            };
+            "b": ns! { <"mod b">
+                useall "useall 3" [];
+                "x": 2;
+            };
+        };
+        let (root, errs) = pre.resolve_uses(&mut sp);
+        assert_eq!(errs, vec![]);
+        assert_eq!(root.query_val(&valpath!(()."x")), Err(
+            Ambiguous { name: "x", sp_names: vec!["useall 1", "useall 2"] }
+        ));
+        let b = root.query_sub(&path!("b")).unwrap();
+        let x = root.query_sub(&path!("a"."x")).unwrap();
+        assert_eq!(b.query_sub(&path!(()."x")), Ok(x));
+    }
+
+    #[test]
+    fn cycle1_pos_test() {
+        let s = "aa".to_owned();
+        let (a0, a1) = (&s[0..1], &s[1..2]);
+        let mut sp = Sp::new();
+        let pre = ns! { <"root">
+            use [a0] as a1;
+        };
+        let errs = sort_errs(&s, pre.resolve_uses(&mut sp).1);
+        assert_eq!(errs, vec![
+            ("a", 0, Cycle { steps: vec![("a", "a")] }),
+        ]);
+        match errs[0].2 {
+            Cycle { ref steps } => {
+                assert!(str_eqeqeq(steps[0].0, a0));
+                assert!(str_eqeqeq(steps[0].1, a1));
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn cycle2_pos_test() {
+        let s = "aabb".to_owned();
+        let (a0, a1, b2, b3) = (&s[0..1], &s[1..2], &s[2..3], &s[3..4]);
+        let mut sp = Sp::new();
+        let pre = ns! { <"root">
+            use [a0] as b2;
+            use [b3] as a1;
+        };
+        let errs = sort_errs(&s, pre.resolve_uses(&mut sp).1);
+        assert!(
+            errs == vec![
+                ("a", 0, Cycle { steps: vec![("a", "a"), ("b", "b")] })
+            ] ||
+            errs == vec![
+                ("b", 3, Cycle { steps: vec![("b", "b"), ("a", "a")] })
+            ],
+            "{:?}", errs
+        );
+        match (errs[0].1, &errs[0].2) {
+            (0, &Cycle { ref steps }) => {
+                assert!(str_eqeqeq(steps[0].0, a0));
+                assert!(str_eqeqeq(steps[0].1, a1));
+                assert!(str_eqeqeq(steps[1].0, b3));
+                assert!(str_eqeqeq(steps[1].1, b2));
+            },
+            (3, &Cycle { ref steps }) => {
+                assert!(str_eqeqeq(steps[0].0, b3));
+                assert!(str_eqeqeq(steps[0].1, b2));
+                assert!(str_eqeqeq(steps[1].0, a0));
+                assert!(str_eqeqeq(steps[1].1, a1));
+            },
+            _ => unreachable!(),
+        }
+    }
+}
